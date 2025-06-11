@@ -8,7 +8,7 @@ import threading
 from flask import Flask, jsonify
 
 # ==================== 🔥 配置 ====================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = "MTM4MTk2NDQzNzk4Mzk4NTc1Ng.GLrjVQ.S0D8lEaKwKkS6Rw84UR5nh6QFnWeWBZoHaO8l0"
 PORT = int(os.getenv("PORT", 8080))
 
 # Discord配置
