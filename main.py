@@ -439,7 +439,7 @@ async def on_member_join(member):
                 print(f"🔍 [DEBUG] 尝试在 {audit_channel} 发送审核消息")
                 embed = discord.Embed(
                     title="🆕 新成员需要审核",
-                    description=f"欢迎 {member.mention}！\n\n请发送已在群内截图（注意打码重要信息）以及QQ号后四位等待管理员审核><",
+                    description=f"欢迎 {member.mention}！\n\n请发送已在群内截图（注意打码重要信息）以及QQ号后四位等待管理员审核><若不在群内请先添加805685816j进行审核",
                     color=0xffa500,
                     timestamp=datetime.now()
                 )
