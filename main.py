@@ -439,7 +439,7 @@ async def on_member_join(member):
                 print(f"🔍 [DEBUG] 尝试在 {audit_channel} 发送审核消息")
                 embed = discord.Embed(
                     title="🆕 新成员需要审核",
-                    description=f"欢迎 {member.mention}！\n\n请发送已在群内截图（注意打码重要信息）以及QQ号后四位等待管理员审核><若不在群内请先添加805685816j进行审核",
+                    description=f"欢迎 {member.mention}！\n\n请发送已在群内截图（注意打码重要信息）以及QQ号后四位等待管理员审核><若不在群内请先添加805685816进行审核",
                     color=0xffa500,
                     timestamp=datetime.now()
                 )
@@ -806,9 +806,11 @@ async def clear_slash(interaction: discord.Interaction, amount: int, user: disco
 
     try:
         if user:
-            deleted = await interaction.followup.channel.purge(limit=amount, check=lambda m: m.author == user)
+            # 修复：使用 interaction.channel 而不是 interaction.followup.channel
+            deleted = await interaction.channel.purge(limit=amount, check=lambda m: m.author == user)
         else:
-            deleted = await interaction.followup.channel.purge(limit=amount)
+            # 修复：使用 interaction.channel 而不是 interaction.followup.channel
+            deleted = await interaction.channel.purge(limit=amount)
 
         embed = discord.Embed(title="🗑️ 消息已清理", color=0x00ff00, timestamp=datetime.now())
         embed.add_field(name="删除数量", value=f"{len(deleted)} 条", inline=True)
@@ -828,6 +830,9 @@ async def clear_slash(interaction: discord.Interaction, amount: int, user: disco
 
     except discord.Forbidden:
         await interaction.followup.send("❌ 我没有权限删除消息！", ephemeral=True)
+    except Exception as e:
+        # 添加更好的错误处理
+        await interaction.followup.send(f"❌ 清理消息时出错: {e}", ephemeral=True)
 
 # ==================== 📢 公告功能 ====================
 
