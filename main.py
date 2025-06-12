@@ -112,7 +112,7 @@ class AuditView(discord.ui.View):
         super().__init__(timeout=None)  # 永不超时
         self.member = member
 
-    @discord.ui.button(label="✅ 通过审核", style=discord.ButtonStyle.green, emoji="✅", custom_id="audit_approve")
+    @discord.ui.button(label="通过审核", style=discord.ButtonStyle.green, emoji="✅", custom_id="audit_approve")
     async def approve_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_moderator_or_admin(interaction):
             await interaction.response.send_message("❌ 你没有审核权限！", ephemeral=True)
@@ -201,7 +201,7 @@ class AuditView(discord.ui.View):
             import traceback
             traceback.print_exc()
 
-    @discord.ui.button(label="❌ 拒绝审核", style=discord.ButtonStyle.red, emoji="❌", custom_id="audit_reject")
+    @discord.ui.button(label="拒绝审核", style=discord.ButtonStyle.red, emoji="❌", custom_id="audit_reject")
     async def reject_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_moderator_or_admin(interaction):
             await interaction.response.send_message("❌ 你没有审核权限！", ephemeral=True)
