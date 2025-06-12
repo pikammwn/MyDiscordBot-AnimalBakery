@@ -112,11 +112,14 @@ class AuditView(discord.ui.View):
         super().__init__(timeout=None)  # 永不超时
         self.member = member
 
-    @discord.ui.button(label="通过审核", style=discord.ButtonStyle.green, emoji="✅", custom_id="audit_approve")
+    @discord.ui.button(label="✅ 通过审核", style=discord.ButtonStyle.green, emoji="✅", custom_id="audit_approve")
     async def approve_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 如果member为None（持久化视图），尝试从消息中获取用户信息
+        if not is_moderator_or_admin(interaction):
+            await interaction.response.send_message("❌ 你没有审核权限！", ephemeral=True)
+            return
+
+        # 获取用户信息
         if self.member is None:
-            # 从embed中提取用户ID
             if interaction.message.embeds:
                 embed = interaction.message.embeds[0]
                 for field in embed.fields:
@@ -128,16 +131,10 @@ class AuditView(discord.ui.View):
                         except (ValueError, AttributeError):
                             continue
 
-            if self.member is None:
-                await interaction.response.send_message("❌ 无法找到目标用户！", ephemeral=True)
-                return
-
-        # 检查权限
-        if not is_moderator_or_admin(interaction):
-            await interaction.response.send_message("❌ 你没有审核权限！", ephemeral=True)
+        if self.member is None:
+            await interaction.response.send_message("❌ 无法找到目标用户！", ephemeral=True)
             return
 
-        # 检查成员是否还在服务器
         if self.member not in interaction.guild.members:
             await interaction.response.send_message("❌ 该用户已离开服务器！", ephemeral=True)
             return
@@ -148,8 +145,11 @@ class AuditView(discord.ui.View):
         rejected_role = discord.utils.get(interaction.guild.roles, name=REJECTED_ROLE_NAME)
 
         if not pending_role or not verified_role:
-            await interaction.response.send_message("❌ 找不到必要的角色！请检查角色配置。", ephemeral=True)
+            await interaction.response.send_message("❌ 找不到必要的角色！", ephemeral=True)
             return
+
+        # 立即响应，避免交互超时
+        await interaction.response.defer()
 
         try:
             # 移除待审核和被拒绝角色，添加已验证角色
@@ -169,13 +169,14 @@ class AuditView(discord.ui.View):
             embed.add_field(name="🛡️ 审核员", value=f"{interaction.user}", inline=True)
             embed.add_field(name="✨ 状态", value="已获得完整服务器权限", inline=False)
 
-            # 禁用按钮并更新消息
+            # 禁用按钮
             for item in self.children:
                 item.disabled = True
 
-            await interaction.response.edit_message(embed=embed, view=self)
+            # 更新消息
+            await interaction.edit_original_response(embed=embed, view=self)
 
-            # 给用户发私信通知
+            # 发私信通知
             try:
                 dm_embed = discord.Embed(
                     title="🎉 审核通过！",
@@ -184,19 +185,30 @@ class AuditView(discord.ui.View):
                 )
                 await self.member.send(embed=dm_embed)
             except discord.Forbidden:
-                pass  # 用户关闭了私信
+                pass
 
-            # 发送欢迎消息到欢迎频道
+            # 发送欢迎消息
             await send_welcome(self.member)
+            
+            # 记录日志
+            await send_log("✅ 审核通过", f"{interaction.user} 通过了 {self.member} 的审核", 0x00ff00)
 
-        except discord.Forbidden:
-            await interaction.response.send_message("❌ 我没有权限修改用户角色！", ephemeral=True)
+        except discord.Forbidden as e:
+            await interaction.edit_original_response(content=f"❌ 权限不足: {e}")
+        except Exception as e:
+            await interaction.edit_original_response(content=f"❌ 操作失败: {e}")
+            print(f"审核通过错误: {e}")
+            import traceback
+            traceback.print_exc()
 
-    @discord.ui.button(label="拒绝审核", style=discord.ButtonStyle.red, emoji="❌", custom_id="audit_reject")
+    @discord.ui.button(label="❌ 拒绝审核", style=discord.ButtonStyle.red, emoji="❌", custom_id="audit_reject")
     async def reject_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 如果member为None（持久化视图），尝试从消息中获取用户信息
+        if not is_moderator_or_admin(interaction):
+            await interaction.response.send_message("❌ 你没有审核权限！", ephemeral=True)
+            return
+
+        # 获取用户信息
         if self.member is None:
-            # 从embed中提取用户ID
             if interaction.message.embeds:
                 embed = interaction.message.embeds[0]
                 for field in embed.fields:
@@ -208,16 +220,10 @@ class AuditView(discord.ui.View):
                         except (ValueError, AttributeError):
                             continue
 
-            if self.member is None:
-                await interaction.response.send_message("❌ 无法找到目标用户！", ephemeral=True)
-                return
-
-        # 检查权限
-        if not is_moderator_or_admin(interaction):
-            await interaction.response.send_message("❌ 你没有审核权限！", ephemeral=True)
+        if self.member is None:
+            await interaction.response.send_message("❌ 无法找到目标用户！", ephemeral=True)
             return
 
-        # 检查成员是否还在服务器
         if self.member not in interaction.guild.members:
             await interaction.response.send_message("❌ 该用户已离开服务器！", ephemeral=True)
             return
@@ -258,13 +264,16 @@ class RejectActionView(discord.ui.View):
     )
     async def select_action(self, interaction: discord.Interaction, select: discord.ui.Select):
         action = select.values[0]
-
-        # 获取相关角色
-        pending_role = discord.utils.get(interaction.guild.roles, name=PENDING_ROLE_NAME)
-        rejected_role = discord.utils.get(interaction.guild.roles, name=REJECTED_ROLE_NAME)
-        verified_role = discord.utils.get(interaction.guild.roles, name=VERIFIED_ROLE_NAME)
-
+        
+        # 立即响应交互，避免超时
+        await interaction.response.defer()
+        
         try:
+            # 获取相关角色
+            pending_role = discord.utils.get(interaction.guild.roles, name=PENDING_ROLE_NAME)
+            rejected_role = discord.utils.get(interaction.guild.roles, name=REJECTED_ROLE_NAME)
+            verified_role = discord.utils.get(interaction.guild.roles, name=VERIFIED_ROLE_NAME)
+
             if action == "keep":
                 # 保留但标记为被拒绝
                 roles_to_remove = [role for role in [pending_role, verified_role] if role in self.member.roles]
@@ -287,7 +296,13 @@ class RejectActionView(discord.ui.View):
                 action_text = "已封禁用户"
                 color = 0xff0000
 
-            # 创建拒绝消息
+            # 创建成功消息
+            success_message = f"✅ 操作完成！{self.member} {action_text}"
+            
+            # 编辑原始交互消息
+            await interaction.edit_original_response(content=success_message, view=None)
+
+            # 创建拒绝消息embed
             embed = discord.Embed(
                 title="❌ 审核被拒绝",
                 description=f"💔 {self.member.mention} 的审核未通过",
@@ -302,7 +317,25 @@ class RejectActionView(discord.ui.View):
             for item in self.original_view.children:
                 item.disabled = True
 
-            # 给用户发私信通知（如果还在服务器里）
+            # 尝试更新原始审核消息
+            try:
+                if hasattr(interaction, 'message') and interaction.message:
+                    # 如果可以访问原始消息，更新它
+                    original_msg = interaction.message
+                    await original_msg.edit(embed=embed, view=self.original_view)
+                else:
+                    # 否则发送到审核频道
+                    audit_channel = bot.get_channel(AUDIT_CHANNEL_ID)
+                    if audit_channel:
+                        await audit_channel.send(embed=embed)
+            except Exception as e:
+                print(f"警告: 无法更新原始消息: {e}")
+                # 发送到审核频道作为备选
+                audit_channel = bot.get_channel(AUDIT_CHANNEL_ID)
+                if audit_channel:
+                    await audit_channel.send(embed=embed)
+
+            # 给用户发私信通知（如果保留在服务器）
             if action == "keep":
                 try:
                     dm_embed = discord.Embed(
@@ -315,41 +348,95 @@ class RejectActionView(discord.ui.View):
                     pass
 
             # 记录日志
-            await send_log("❌ 快速审核拒绝", f"{interaction.user} 通过按钮拒绝了 {self.member}\n操作：{action_text}", color)
+            await send_log("❌ 审核拒绝", f"{interaction.user} 拒绝了 {self.member}\n操作：{action_text}", color)
 
-            # 回复当前交互
-            await interaction.response.edit_message(content="✅ 操作已完成！", view=None)
-
-            # 发送新的拒绝消息到审核频道
-            audit_channel = bot.get_channel(AUDIT_CHANNEL_ID)
-            if audit_channel:
-                await audit_channel.send(embed=embed)
-
-        except discord.Forbidden:
-            await interaction.response.edit_message(content="❌ 我没有足够权限执行此操作！", view=None)
+        except discord.Forbidden as e:
+            error_message = f"❌ 权限不足！无法执行此操作: {e}"
+            await interaction.edit_original_response(content=error_message, view=None)
+        except Exception as e:
+            error_message = f"❌ 操作失败: {e}"
+            await interaction.edit_original_response(content=error_message, view=None)
+            print(f"拒绝操作错误: {e}")
+            import traceback
+            traceback.print_exc()
 
 # ==================== 🤖 基础事件 ====================
 @bot.event
 async def on_ready():
     print(f'🎯 {bot.user} 已在Vultr上线！')
     print(f'📊 在 {len(bot.guilds)} 个服务器运行')
+    
+    # 检查重要配置
+    guild = bot.get_guild(GUILD_ID)
+    if guild:
+        print(f'✅ 连接到服务器: {guild.name}')
+        
+        # 检查角色
+        pending_role = discord.utils.get(guild.roles, name=PENDING_ROLE_NAME)
+        verified_role = discord.utils.get(guild.roles, name=VERIFIED_ROLE_NAME)
+        rejected_role = discord.utils.get(guild.roles, name=REJECTED_ROLE_NAME)
+        
+        print(f'🔍 角色检查:')
+        print(f'  - 待审核: {"✅" if pending_role else "❌"} {pending_role}')
+        print(f'  - 喜欢您来: {"✅" if verified_role else "❌"} {verified_role}')
+        print(f'  - 未通过审核: {"✅" if rejected_role else "❌"} {rejected_role}')
+        
+        # 检查频道
+        audit_channel = bot.get_channel(AUDIT_CHANNEL_ID)
+        welcome_channel = bot.get_channel(WELCOME_CHANNEL_ID)
+        log_channel = bot.get_channel(LOG_CHANNEL_ID)
+        
+        print(f'🔍 频道检查:')
+        print(f'  - 审核频道: {"✅" if audit_channel else "❌"} {audit_channel}')
+        print(f'  - 欢迎频道: {"✅" if welcome_channel else "❌"} {welcome_channel}')
+        print(f'  - 日志频道: {"✅" if log_channel else "❌"} {log_channel}')
+        
+        # 检查bot权限
+        bot_member = guild.get_member(bot.user.id)
+        if bot_member:
+            perms = bot_member.guild_permissions
+            print(f'🔍 权限检查:')
+            print(f'  - 管理角色: {"✅" if perms.manage_roles else "❌"}')
+            print(f'  - 发送消息: {"✅" if perms.send_messages else "❌"}')
+            print(f'  - 嵌入链接: {"✅" if perms.embed_links else "❌"}')
+            
+            # 检查角色位置
+            bot_top_role = bot_member.top_role
+            print(f'🔍 Bot最高角色: {bot_top_role.name} (位置: {bot_top_role.position})')
+            if pending_role:
+                if bot_top_role.position > pending_role.position:
+                    print(f'✅ Bot角色位置正确，高于待审核角色')
+                else:
+                    print(f'❌ 警告: Bot角色位置过低！需要将Bot角色移动到待审核角色之上')
+    else:
+        print(f'❌ 找不到指定的服务器 (ID: {GUILD_ID})')
+    
     await bot.change_presence(activity=discord.Game(name="🚀 Vultr稳定运行"))
+    print(f'✅ Bot初始化完成！使用 /debug 命令检查详细配置')
 
 # 新成员自动进入审核流程
 @bot.event
 async def on_member_join(member):
     """新成员加入自动审核流程"""
+    print(f"🔍 [DEBUG] 新成员加入: {member} (ID: {member.id})")
+    
     # 获取待审核角色
     pending_role = discord.utils.get(member.guild.roles, name=PENDING_ROLE_NAME)
     audit_channel = bot.get_channel(AUDIT_CHANNEL_ID)
+    
+    print(f"🔍 [DEBUG] 找到待审核角色: {pending_role}")
+    print(f"🔍 [DEBUG] 找到审核频道: {audit_channel}")
 
     if pending_role:
         try:
             # 给新成员添加待审核角色
+            print(f"🔍 [DEBUG] 尝试给 {member} 添加角色 {pending_role}")
             await member.add_roles(pending_role)
+            print(f"✅ [DEBUG] 成功给 {member} 添加待审核角色")
 
             # 发送审核区欢迎消息（附带按钮视图）
             if audit_channel:
+                print(f"🔍 [DEBUG] 尝试在 {audit_channel} 发送审核消息")
                 embed = discord.Embed(
                     title="🆕 新成员需要审核",
                     description=f"欢迎 {member.mention}！\n\n请发送已在群内截图（注意打码重要信息）以及QQ号后四位等待管理员审核><",
@@ -364,119 +451,25 @@ async def on_member_join(member):
 
                 # ✅ 附加按钮视图
                 await audit_channel.send(embed=embed, view=AuditView(member))
+                print(f"✅ [DEBUG] 成功在审核频道发送消息")
+            else:
+                print(f"❌ [DEBUG] 审核频道不存在或无权限访问")
 
             # 记录日志
             await send_log("🆕 新成员加入", f"{member} 已自动分配到待审核状态", 0xffa500)
+            print(f"✅ [DEBUG] 成功记录日志")
 
-        except discord.Forbidden:
-            await send_log("❌ 权限错误", f"无法给 {member} 分配待审核角色", 0xff0000)
+        except discord.Forbidden as e:
+            print(f"❌ [DEBUG] 权限错误: {e}")
+            await send_log("❌ 权限错误", f"无法给 {member} 分配待审核角色 - 错误: {e}", 0xff0000)
+        except Exception as e:
+            print(f"❌ [DEBUG] 其他错误: {e}")
+            await send_log("❌ 未知错误", f"处理新成员 {member} 时出错: {e}", 0xff0000)
     else:
+        print(f"❌ [DEBUG] 找不到'{PENDING_ROLE_NAME}'角色")
         await send_log("❌ 角色错误", f"找不到'{PENDING_ROLE_NAME}'角色", 0xff0000)
 
 # ==================== 🎭 审核按钮交互组件 ====================
-class RejectActionView(discord.ui.View):
-    def __init__(self, member: discord.Member, original_view: AuditView):
-        super().__init__(timeout=60)
-        self.member = member
-        self.original_view = original_view
-
-    @discord.ui.select(
-        placeholder="选择拒绝后的操作...",
-        options=[
-            discord.SelectOption(
-                label="保留在服务器",
-                description="标记为被拒绝用户，但保留在服务器",
-                emoji="🔒",
-                value="keep"
-            ),
-            discord.SelectOption(
-                label="踢出服务器", 
-                description="将用户踢出服务器",
-                emoji="👢",
-                value="kick"
-            ),
-            discord.SelectOption(
-                label="封禁用户",
-                description="永久封禁该用户",
-                emoji="🔨", 
-                value="ban"
-            )
-        ]
-    )
-    async def select_action(self, interaction: discord.Interaction, select: discord.ui.Select):
-        action = select.values[0]
-
-        # 获取相关角色
-        pending_role = discord.utils.get(interaction.guild.roles, name=PENDING_ROLE_NAME)
-        rejected_role = discord.utils.get(interaction.guild.roles, name=REJECTED_ROLE_NAME)
-        verified_role = discord.utils.get(interaction.guild.roles, name=VERIFIED_ROLE_NAME)
-
-        try:
-            if action == "keep":
-                # 保留但标记为被拒绝
-                roles_to_remove = [role for role in [pending_role, verified_role] if role in self.member.roles]
-                if roles_to_remove:
-                    await self.member.remove_roles(*roles_to_remove)
-                if rejected_role:
-                    await self.member.add_roles(rejected_role)
-                action_text = "已标记为被拒绝用户"
-                color = 0xff6600
-
-            elif action == "kick":
-                # 踢出服务器
-                await self.member.kick(reason="审核被拒绝")
-                action_text = "已踢出服务器"
-                color = 0xff9900
-
-            elif action == "ban":
-                # 封禁用户
-                await self.member.ban(reason="审核被拒绝")
-                action_text = "已封禁用户"
-                color = 0xff0000
-
-            # 创建拒绝消息
-            embed = discord.Embed(
-                title="❌ 审核被拒绝",
-                description=f"💔 {self.member.mention} 的审核未通过",
-                color=color,
-                timestamp=datetime.now()
-            )
-            embed.add_field(name="👤 用户", value=f"{self.member}", inline=True)
-            embed.add_field(name="🛡️ 审核员", value=f"{interaction.user}", inline=True)
-            embed.add_field(name="⚡ 操作", value=action_text, inline=False)
-
-            # 禁用原消息的按钮并更新消息
-            for item in self.original_view.children:
-                item.disabled = True
-
-            # 获取原始交互消息并更新
-            try:
-                # 从响应中获取原始消息
-                await interaction.message.edit(embed=embed, view=self.original_view)
-            except:
-                # 如果无法编辑原消息，尝试通过followup发送新消息
-                await interaction.followup.send(embed=embed)
-
-            # 给用户发私信通知（如果还在服务器里）
-            if action == "keep":
-                try:
-                    dm_embed = discord.Embed(
-                        title="❌ 审核未通过",
-                        description=f"很抱歉，你在 **{interaction.guild.name}** 的审核未通过。\n\n如有疑问请联系管理员。",
-                        color=0xff0000
-                    )
-                    await self.member.send(embed=dm_embed)
-                except discord.Forbidden:
-                    pass
-
-            # 记录日志
-            await send_log("❌ 快速审核拒绝", f"{interaction.user} 通过按钮拒绝了 {self.member}\n操作：{action_text}", color)
-
-            await interaction.response.edit_message(content="✅ 操作已完成！", view=None)
-
-        except discord.Forbidden:
-            await interaction.response.edit_message(content="❌ 我没有足够权限执行此操作！", view=None)
-
 def is_moderator_or_admin(interaction: discord.Interaction) -> bool:
     """检查用户是否为管理员或审核员"""
     user_roles = [role.name for role in interaction.user.roles]
@@ -1218,6 +1211,98 @@ async def topbutton_slash(interaction: discord.Interaction):
 
 # ==================== 🆘 帮助命令 ====================
 
+@bot.tree.command(name="debug", description="检查bot权限和角色配置")
+async def debug_command(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ 只有管理员可以使用此命令！", ephemeral=True)
+        return
+    
+    embed = discord.Embed(title="🔍 权限诊断报告", color=0xff9900)
+    
+    # 检查角色是否存在
+    pending_role = discord.utils.get(interaction.guild.roles, name=PENDING_ROLE_NAME)
+    verified_role = discord.utils.get(interaction.guild.roles, name=VERIFIED_ROLE_NAME)
+    rejected_role = discord.utils.get(interaction.guild.roles, name=REJECTED_ROLE_NAME)
+    
+    role_status = f"待审核: {'✅' if pending_role else '❌'}"
+    if pending_role:
+        role_status += f" (位置: {pending_role.position})"
+    role_status += f"\n喜欢您来: {'✅' if verified_role else '❌'}"
+    if verified_role:
+        role_status += f" (位置: {verified_role.position})"
+    role_status += f"\n未通过审核: {'✅' if rejected_role else '❌'}"
+    if rejected_role:
+        role_status += f" (位置: {rejected_role.position})"
+    
+    embed.add_field(name="角色检查", value=role_status, inline=False)
+    
+    # 检查频道权限
+    audit_channel = bot.get_channel(AUDIT_CHANNEL_ID)
+    welcome_channel = bot.get_channel(WELCOME_CHANNEL_ID)
+    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+    
+    channel_status = f"审核频道: {'✅' if audit_channel else '❌'}\n"
+    channel_status += f"欢迎频道: {'✅' if welcome_channel else '❌'}\n"
+    channel_status += f"日志频道: {'✅' if log_channel else '❌'}"
+    
+    embed.add_field(name="频道检查", value=channel_status, inline=False)
+    
+    # 检查bot权限
+    bot_member = interaction.guild.get_member(bot.user.id)
+    perms = bot_member.guild_permissions
+    
+    perm_status = f"管理角色: {'✅' if perms.manage_roles else '❌'}\n"
+    perm_status += f"发送消息: {'✅' if perms.send_messages else '❌'}\n"
+    perm_status += f"嵌入链接: {'✅' if perms.embed_links else '❌'}\n"
+    perm_status += f"查看频道: {'✅' if perms.view_channel else '❌'}"
+    
+    embed.add_field(name="权限检查", value=perm_status, inline=False)
+    
+    # 检查bot角色位置
+    bot_role = bot_member.top_role
+    bot_role_info = f"Bot最高角色: {bot_role.name} (位置: {bot_role.position})\n"
+    
+    if pending_role:
+        if bot_role.position > pending_role.position:
+            bot_role_info += f"✅ Bot角色高于待审核角色"
+        else:
+            bot_role_info += f"❌ Bot角色低于待审核角色！需要提升Bot角色位置"
+    
+    embed.add_field(name="角色层级检查", value=bot_role_info, inline=False)
+    
+    # 添加解决建议
+    suggestions = ""
+    if not pending_role:
+        suggestions += "• 创建名为'待审核'的角色\n"
+    if not perms.manage_roles:
+        suggestions += "• 给Bot添加'管理角色'权限\n"
+    if pending_role and bot_role.position <= pending_role.position:
+        suggestions += "• 将Bot角色拖拽到'待审核'角色之上\n"
+    if not audit_channel:
+        suggestions += "• 检查审核频道ID是否正确\n"
+    
+    if suggestions:
+        embed.add_field(name="🔧 建议修复", value=suggestions, inline=False)
+    else:
+        embed.add_field(name="✅ 状态", value="配置看起来正常！", inline=False)
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="testjoin", description="模拟新成员加入（测试用）")
+async def test_join_command(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ 只有管理员可以使用此命令！", ephemeral=True)
+        return
+    
+    print(f"🔍 [TEST] 管理员 {interaction.user} 触发测试加入事件")
+    
+    # 模拟 on_member_join 事件
+    try:
+        await on_member_join(interaction.user)
+        await interaction.response.send_message("✅ 测试完成！请检查控制台输出和审核频道。", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ 测试时出错: {e}", ephemeral=True)
+
 @bot.tree.command(name="help", description="查看所有可用命令")
 async def help_slash(interaction: discord.Interaction):
     embed = discord.Embed(title=f"🤖 {BOT_NAME} 命令帮助", color=BOT_COLOR)
@@ -1227,6 +1312,13 @@ async def help_slash(interaction: discord.Interaction):
         embed.add_field(
             name="🔍 审核系统",
             value="`/approve` - 批准用户\n`/reject` - 拒绝用户\n`/pending` - 待审核列表\n`/reaudit` - 重新审核",
+            inline=False
+        )
+
+    if interaction.user.guild_permissions.administrator:
+        embed.add_field(
+            name="🛠️ 调试工具",
+            value="`/debug` - 检查权限配置\n`/testjoin` - 测试新成员加入",
             inline=False
         )
 
