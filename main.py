@@ -222,35 +222,181 @@ class AuditView(discord.ui.View):
             await interaction.response.send_message("❌ 你没有审核权限！", ephemeral=True)
             return
 
-        # 简化的拒绝逻辑
-        embed = discord.Embed(
-            title="❌ 审核被拒绝",
-            description="审核未通过，请联系管理员。",
-            color=0xff0000,
-            timestamp=datetime.now()
-        )
+        # 获取用户信息
+        if self.member is None:
+            if interaction.message.embeds:
+                embed = interaction.message.embeds[0]
+                for field in embed.fields:
+                    if "ID" in field.name and field.value:
+                        user_id = field.value.strip('`')
+                        try:
+                            self.member = interaction.guild.get_member(int(user_id))
+                            break
+                        except (ValueError, AttributeError):
+                            continue
 
-        for item in self.children:
-            item.disabled = True
+        if self.member is None:
+            await interaction.response.send_message("❌ 无法找到目标用户！", ephemeral=True)
+            return
 
-        await interaction.response.edit_message(embed=embed, view=self)
-        await send_log("❌ 审核拒绝", f"{interaction.user} 拒绝了用户审核", 0xff0000)
+        # 创建拒绝选项的下拉菜单
+        select_view = RejectActionView(self.member, self)
+        await interaction.response.send_message("请选择拒绝后的操作：", view=select_view, ephemeral=True)
+
+class RejectActionView(discord.ui.View):
+    def __init__(self, member: discord.Member, original_view: AuditView):
+        super().__init__(timeout=60)
+        self.member = member
+        self.original_view = original_view
+
+    @discord.ui.select(
+        placeholder="选择拒绝后的操作...",
+        custom_id="reject_action_select",
+        options=[
+            discord.SelectOption(
+                label="保留在服务器",
+                description="标记为被拒绝用户，但保留在服务器",
+                emoji="🔒",
+                value="keep"
+            ),
+            discord.SelectOption(
+                label="踢出服务器", 
+                description="将用户踢出服务器",
+                emoji="👢",
+                value="kick"
+            ),
+            discord.SelectOption(
+                label="封禁用户",
+                description="永久封禁该用户",
+                emoji="🔨", 
+                value="ban"
+            )
+        ]
+    )
+    async def select_action(self, interaction: discord.Interaction, select: discord.ui.Select):
+        action = select.values[0]
+
+        # 获取相关角色
+        pending_role = discord.utils.get(interaction.guild.roles, name=PENDING_ROLE_NAME)
+        rejected_role = discord.utils.get(interaction.guild.roles, name=REJECTED_ROLE_NAME)
+        verified_role = discord.utils.get(interaction.guild.roles, name=VERIFIED_ROLE_NAME)
+
+        try:
+            if action == "keep":
+                # 保留但标记为被拒绝
+                roles_to_remove = [role for role in [pending_role, verified_role] if role in self.member.roles]
+                if roles_to_remove:
+                    await self.member.remove_roles(*roles_to_remove)
+                if rejected_role:
+                    await self.member.add_roles(rejected_role)
+                action_text = "已标记为被拒绝用户"
+                color = 0xff6600
+
+            elif action == "kick":
+                # 踢出服务器
+                await self.member.kick(reason="审核被拒绝")
+                action_text = "已踢出服务器"
+                color = 0xff9900
+
+            elif action == "ban":
+                # 封禁用户
+                await self.member.ban(reason="审核被拒绝")
+                action_text = "已封禁用户"
+                color = 0xff0000
+
+            # 创建拒绝消息
+            embed = discord.Embed(
+                title="❌ 审核被拒绝",
+                description=f"💔 {self.member.mention} 的审核未通过",
+                color=color,
+                timestamp=datetime.now()
+            )
+            embed.add_field(name="👤 用户", value=f"{self.member}", inline=True)
+            embed.add_field(name="🛡️ 审核员", value=f"{interaction.user}", inline=True)
+            embed.add_field(name="⚡ 操作", value=action_text, inline=False)
+
+            # 禁用原消息的按钮
+            for item in self.original_view.children:
+                item.disabled = True
+
+            # 更新原消息
+            await interaction.message.edit(embed=embed, view=self.original_view)
+
+            # 给用户发私信通知（如果还在服务器里）
+            if action == "keep":
+                try:
+                    dm_embed = discord.Embed(
+                        title="❌ 审核未通过",
+                        description=f"很抱歉，你在 **{interaction.guild.name}** 的审核未通过。\n\n如有疑问请联系管理员。",
+                        color=0xff0000
+                    )
+                    await self.member.send(embed=dm_embed)
+                except discord.Forbidden:
+                    pass
+
+            # 记录日志
+            await send_log("❌ 审核拒绝", f"{interaction.user} 拒绝了 {self.member}\n操作：{action_text}", color)
+
+            # 回复当前交互
+            await interaction.response.edit_message(content="✅ 操作已完成！", view=None)
+
+        except discord.Forbidden:
+            await interaction.response.edit_message(content="❌ 我没有足够权限执行此操作！", view=None)
 
 # ==================== 🚀 回首楼功能 ====================
-class PersistentTopButtonView(discord.ui.View):
+class TopButtonView(discord.ui.View):
+    """临时回顶按钮视图"""
     def __init__(self):
-        super().__init__(timeout=None)
+        super().__init__(timeout=30)
 
-    @discord.ui.button(label="🚀 回到首楼", style=discord.ButtonStyle.primary, emoji="🚀", custom_id="persistent_top_button")
-    async def persistent_top_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="🚀 再次回首楼", style=discord.ButtonStyle.primary, emoji="🚀")
+    async def top_again_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
+            # 获取频道的第一条消息
             messages = []
             async for message in interaction.channel.history(limit=None, oldest_first=True):
                 messages.append(message)
                 break
 
             if not messages:
-                await interaction.response.send_message("❌ 频道没有消息！", ephemeral=True)
+                await interaction.response.send_message("❌ 这个频道还没有消息呢！", ephemeral=True)
+                return
+
+            first_message = messages[0]
+            jump_url = f"https://discord.com/channels/{interaction.guild.id}/{interaction.channel.id}/{first_message.id}"
+
+            cute_messages = [
+                f"🐕 汪！[又回到首楼了呢～]({jump_url})",
+                f"✨ [再次传送成功！]({jump_url})",
+                f"🎉 [咻咻咻～]({jump_url})",
+                f"🌟 [无限回首楼模式！]({jump_url})",
+                f"🏃‍♂️ [来回跑真开心！]({jump_url})"
+            ]
+
+            import random
+            await interaction.response.send_message(
+                random.choice(cute_messages), 
+                ephemeral=True
+            )
+        except Exception as e:
+            await interaction.response.send_message("❌ 获取第一条消息时出错了！", ephemeral=True)
+
+class PersistentTopButtonView(discord.ui.View):
+    """持久化回顶按钮视图"""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🚀 回到首楼", style=discord.ButtonStyle.primary, emoji="🚀", custom_id="persistent_top_button")
+    async def persistent_top_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            # 获取频道的第一条消息
+            messages = []
+            async for message in interaction.channel.history(limit=None, oldest_first=True):
+                messages.append(message)
+                break
+
+            if not messages:
+                await interaction.response.send_message("❌ 这个频道还没有消息呢！", ephemeral=True)
                 return
 
             first_message = messages[0]
@@ -259,16 +405,20 @@ class PersistentTopButtonView(discord.ui.View):
             cute_messages = [
                 f"🐕 汪！[瞬间回首楼！]({jump_url})",
                 f"✨ [咻～传送完成！]({jump_url})",
-                f"🎉 [成功抵达首楼！]({jump_url})"
+                f"🎉 [成功抵达首楼！]({jump_url})",
+                f"🌟 [时光倒流成功！]({jump_url})",
+                f"🏃‍♂️ [闪现回首楼！]({jump_url})"
             ]
 
             import random
-            await interaction.response.send_message(random.choice(cute_messages), ephemeral=True)
-
+            await interaction.response.send_message(
+                random.choice(cute_messages), 
+                ephemeral=True
+            )
         except Exception as e:
-            await interaction.response.send_message("❌ 出错了！", ephemeral=True)
+            await interaction.response.send_message("❌ 获取第一条消息时出错了！", ephemeral=True)
 
-# ==================== 📋 基础命令 ====================
+# ==================== 📋 斜杠命令 ====================
 @bot.tree.command(name="ping", description="检查机器人状态")
 async def ping_command(interaction: discord.Interaction):
     latency = round(bot.latency * 1000)
@@ -281,16 +431,647 @@ async def ping_command(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="help", description="查看帮助")
-async def help_command(interaction: discord.Interaction):
-    embed = discord.Embed(title=f"🤖 {BOT_NAME} 帮助", color=BOT_COLOR)
+# ==================== 🔍 审核命令 ====================
+@bot.tree.command(name="approve", description="批准待审核用户")
+@app_commands.describe(
+    member="要批准的用户",
+    reason="批准原因（可选）"
+)
+async def approve_member(interaction: discord.Interaction, member: discord.Member, reason: str = "通过审核"):
+    if not is_moderator_or_admin(interaction):
+        await interaction.response.send_message("❌ 你没有审核权限！", ephemeral=True)
+        return
 
+    # 获取相关角色
+    pending_role = discord.utils.get(interaction.guild.roles, name=PENDING_ROLE_NAME)
+    verified_role = discord.utils.get(interaction.guild.roles, name=VERIFIED_ROLE_NAME)
+    rejected_role = discord.utils.get(interaction.guild.roles, name=REJECTED_ROLE_NAME)
+
+    if not pending_role or not verified_role:
+        await interaction.response.send_message("❌ 找不到必要的角色！请检查角色配置。", ephemeral=True)
+        return
+
+    try:
+        # 移除待审核和被拒绝角色，添加已验证角色
+        roles_to_remove = [role for role in [pending_role, rejected_role] if role in member.roles]
+        if roles_to_remove:
+            await member.remove_roles(*roles_to_remove)
+        await member.add_roles(verified_role)
+
+        # 创建批准消息
+        embed = discord.Embed(
+            title="✅ 用户审核通过",
+            color=0x00ff00,
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="👤 用户", value=f"{member}", inline=True)
+        embed.add_field(name="🛡️ 审核员", value=f"{interaction.user}", inline=True)
+        embed.add_field(name="📝 原因", value=reason, inline=False)
+
+        await interaction.response.send_message(embed=embed)
+
+        # 给用户发私信通知
+        try:
+            dm_embed = discord.Embed(
+                title="🎉 审核通过！",
+                description=f"恭喜！你在 **{interaction.guild.name}** 的审核已通过！\n\n现在你可以查看和参与所有频道了。",
+                color=0x00ff00
+            )
+            await member.send(embed=dm_embed)
+        except discord.Forbidden:
+            pass
+
+        # 发送欢迎消息到欢迎频道
+        await send_welcome(member)
+
+    except discord.Forbidden:
+        await interaction.response.send_message("❌ 我没有权限修改用户角色！", ephemeral=True)
+
+@bot.tree.command(name="reject", description="拒绝待审核用户")
+@app_commands.describe(
+    member="要拒绝的用户",
+    reason="拒绝原因",
+    action="拒绝后的操作"
+)
+@app_commands.choices(action=[
+    app_commands.Choice(name="保留在服务器（受限权限）", value="keep"),
+    app_commands.Choice(name="踢出服务器", value="kick"),
+    app_commands.Choice(name="封禁用户", value="ban")
+])
+async def reject_member(interaction: discord.Interaction, member: discord.Member, reason: str, action: str = "keep"):
+    if not is_moderator_or_admin(interaction):
+        await interaction.response.send_message("❌ 你没有审核权限！", ephemeral=True)
+        return
+
+    # 获取相关角色
+    pending_role = discord.utils.get(interaction.guild.roles, name=PENDING_ROLE_NAME)
+    rejected_role = discord.utils.get(interaction.guild.roles, name=REJECTED_ROLE_NAME)
+    verified_role = discord.utils.get(interaction.guild.roles, name=VERIFIED_ROLE_NAME)
+
+    try:
+        if action == "keep":
+            # 保留但标记为被拒绝
+            roles_to_remove = [role for role in [pending_role, verified_role] if role in member.roles]
+            if roles_to_remove:
+                await member.remove_roles(*roles_to_remove)
+            if rejected_role:
+                await member.add_roles(rejected_role)
+            action_text = "已标记为被拒绝用户"
+
+        elif action == "kick":
+            # 踢出服务器
+            await member.kick(reason=f"审核被拒绝：{reason}")
+            action_text = "已踢出服务器"
+
+        elif action == "ban":
+            # 封禁用户
+            await member.ban(reason=f"审核被拒绝：{reason}")
+            action_text = "已封禁用户"
+
+        # 创建拒绝消息
+        embed = discord.Embed(
+            title="❌ 用户审核被拒绝",
+            color=0xff0000,
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="👤 用户", value=f"{member}", inline=True)
+        embed.add_field(name="🛡️ 审核员", value=f"{interaction.user}", inline=True)
+        embed.add_field(name="📝 原因", value=reason, inline=False)
+        embed.add_field(name="⚡ 操作", value=action_text, inline=False)
+
+        await interaction.response.send_message(embed=embed)
+
+        # 给用户发私信通知（如果还在服务器里）
+        if action == "keep":
+            try:
+                dm_embed = discord.Embed(
+                    title="❌ 审核未通过",
+                    description=f"很抱歉，你在 **{interaction.guild.name}** 的审核未通过。\n\n**原因：** {reason}\n\n如有疑问请联系管理员。",
+                    color=0xff0000
+                )
+                await member.send(embed=dm_embed)
+            except discord.Forbidden:
+                pass
+
+        # 记录日志
+        await send_log("❌ 用户审核被拒绝", f"{interaction.user} 拒绝了 {member}\n原因：{reason}\n操作：{action_text}", 0xff0000)
+
+    except discord.Forbidden:
+        await interaction.response.send_message("❌ 我没有足够权限执行此操作！", ephemeral=True)
+
+@bot.tree.command(name="pending", description="查看待审核用户列表")
+async def view_pending(interaction: discord.Interaction):
+    if not is_moderator_or_admin(interaction):
+        await interaction.response.send_message("❌ 你没有审核权限！", ephemeral=True)
+        return
+
+    # 获取待审核角色
+    pending_role = discord.utils.get(interaction.guild.roles, name=PENDING_ROLE_NAME)
+
+    if not pending_role:
+        await interaction.response.send_message("❌ 找不到待审核角色！", ephemeral=True)
+        return
+
+    # 获取待审核用户
+    pending_members = [member for member in interaction.guild.members if pending_role in member.roles]
+
+    if not pending_members:
+        embed = discord.Embed(
+            title="📋 待审核用户列表",
+            description="当前没有待审核的用户。",
+            color=BOT_COLOR
+        )
+    else:
+        embed = discord.Embed(
+            title="📋 待审核用户列表",
+            description=f"共有 {len(pending_members)} 位用户等待审核：",
+            color=0xffa500,
+            timestamp=datetime.now()
+        )
+
+        for i, member in enumerate(pending_members[:10], 1):  # 限制显示10个
+            join_time = f"<t:{int(member.joined_at.timestamp())}:R>"
+            embed.add_field(
+                name=f"{i}. {member.display_name}",
+                value=f"**用户：** {member.mention}\n**加入：** {join_time}\n**ID：** `{member.id}`",
+                inline=True
+            )
+
+        if len(pending_members) > 10:
+            embed.set_footer(text=f"显示前10位，总共{len(pending_members)}位用户")
+
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="reaudit", description="重新审核被拒绝的用户")
+@app_commands.describe(member="要重新审核的用户")
+async def reaudit_member(interaction: discord.Interaction, member: discord.Member):
+    if not is_moderator_or_admin(interaction):
+        await interaction.response.send_message("❌ 你没有审核权限！", ephemeral=True)
+        return
+
+    # 获取相关角色
+    rejected_role = discord.utils.get(interaction.guild.roles, name=REJECTED_ROLE_NAME)
+    pending_role = discord.utils.get(interaction.guild.roles, name=PENDING_ROLE_NAME)
+
+    if not rejected_role or not pending_role:
+        await interaction.response.send_message("❌ 找不到必要的角色！", ephemeral=True)
+        return
+
+    if rejected_role not in member.roles:
+        await interaction.response.send_message("❌ 该用户不在被拒绝列表中！", ephemeral=True)
+        return
+
+    try:
+        # 移除被拒绝角色，添加待审核角色
+        await member.remove_roles(rejected_role)
+        await member.add_roles(pending_role)
+
+        embed = discord.Embed(
+            title="🔄 重新审核",
+            description=f"{member.mention} 已重新进入审核流程",
+            color=0xffa500,
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="🛡️ 操作员", value=f"{interaction.user}", inline=True)
+
+        await interaction.response.send_message(embed=embed)
+
+        # 通知审核区
+        audit_channel = bot.get_channel(AUDIT_CHANNEL_ID)
+        if audit_channel:
+            await audit_channel.send(f"🔄 {member.mention} 重新进入审核流程，请重新提交相关材料。")
+
+        # 记录日志
+        await send_log("🔄 重新审核", f"{interaction.user} 将 {member} 重新加入审核流程", 0xffa500)
+
+    except discord.Forbidden:
+        await interaction.response.send_message("❌ 我没有权限修改用户角色！", ephemeral=True)
+
+# ==================== 👥 用户管理命令 ====================
+@bot.tree.command(name="kick", description="踢出一个成员")
+@app_commands.describe(
+    member="要踢出的成员",
+    reason="踢出原因"
+)
+async def kick_slash(interaction: discord.Interaction, member: discord.Member, reason: str = "未提供原因"):
+    if not interaction.user.guild_permissions.kick_members:
+        await interaction.response.send_message("❌ 你没有踢出成员的权限！", ephemeral=True)
+        return
+
+    try:
+        await member.kick(reason=reason)
+        embed = discord.Embed(title="👢 成员已踢出", color=0xff9900, timestamp=datetime.now())
+        embed.add_field(name="用户", value=f"{member}", inline=True)
+        embed.add_field(name="执行者", value=f"{interaction.user}", inline=True)
+        embed.add_field(name="原因", value=reason, inline=False)
+
+        await interaction.response.send_message(embed=embed)
+        await send_log("👢 踢出成员", f"{interaction.user} 踢出了 {member}\n原因：{reason}", 0xff9900)
+    except discord.Forbidden:
+        await interaction.response.send_message("❌ 我没有权限踢出这个用户！", ephemeral=True)
+
+@bot.tree.command(name="ban", description="封禁一个成员")
+@app_commands.describe(
+    member="要封禁的成员",
+    reason="封禁原因"
+)
+async def ban_slash(interaction: discord.Interaction, member: discord.Member, reason: str = "未提供原因"):
+    if not interaction.user.guild_permissions.ban_members:
+        await interaction.response.send_message("❌ 你没有封禁成员的权限！", ephemeral=True)
+        return
+
+    try:
+        await member.ban(reason=reason)
+        embed = discord.Embed(title="🔨 成员已封禁", color=0xff0000, timestamp=datetime.now())
+        embed.add_field(name="用户", value=f"{member}", inline=True)
+        embed.add_field(name="执行者", value=f"{interaction.user}", inline=True)
+        embed.add_field(name="原因", value=reason, inline=False)
+
+        await interaction.response.send_message(embed=embed)
+        await send_log("🔨 封禁成员", f"{interaction.user} 封禁了 {member}\n原因：{reason}", 0xff0000)
+    except discord.Forbidden:
+        await interaction.response.send_message("❌ 我没有权限封禁这个用户！", ephemeral=True)
+
+@bot.tree.command(name="timeout", description="禁言一个成员")
+@app_commands.describe(
+    member="要禁言的成员",
+    duration="禁言时长（分钟）",
+    reason="禁言原因"
+)
+async def timeout_slash(interaction: discord.Interaction, member: discord.Member, duration: int, reason: str = "未提供原因"):
+    if not interaction.user.guild_permissions.moderate_members:
+        await interaction.response.send_message("❌ 你没有禁言成员的权限！", ephemeral=True)
+        return
+
+    if duration > 1440:  # 24小时限制
+        await interaction.response.send_message("❌ 禁言时长不能超过24小时（1440分钟）！", ephemeral=True)
+        return
+
+    try:
+        until = discord.utils.utcnow() + timedelta(minutes=duration)
+        await member.timeout(until, reason=reason)
+
+        embed = discord.Embed(title="🔇 成员已禁言", color=0xffaa00, timestamp=datetime.now())
+        embed.add_field(name="用户", value=f"{member}", inline=True)
+        embed.add_field(name="时长", value=f"{duration} 分钟", inline=True)
+        embed.add_field(name="解除时间", value=f"<t:{int(until.timestamp())}:R>", inline=True)
+        embed.add_field(name="执行者", value=f"{interaction.user}", inline=True)
+        embed.add_field(name="原因", value=reason, inline=False)
+
+        await interaction.response.send_message(embed=embed)
+        await send_log("🔇 禁言成员", f"{interaction.user} 禁言了 {member} {duration}分钟\n原因：{reason}", 0xffaa00)
+    except discord.Forbidden:
+        await interaction.response.send_message("❌ 我没有权限禁言这个用户！", ephemeral=True)
+
+@bot.tree.command(name="untimeout", description="解除成员禁言")
+@app_commands.describe(member="要解除禁言的成员")
+async def untimeout_slash(interaction: discord.Interaction, member: discord.Member):
+    if not interaction.user.guild_permissions.moderate_members:
+        await interaction.response.send_message("❌ 你没有解除禁言的权限！", ephemeral=True)
+        return
+
+    try:
+        await member.timeout(None)
+        embed = discord.Embed(title="🔊 禁言已解除", color=0x00ff00, timestamp=datetime.now())
+        embed.add_field(name="用户", value=f"{member}", inline=True)
+        embed.add_field(name="执行者", value=f"{interaction.user}", inline=True)
+
+        await interaction.response.send_message(embed=embed)
+        await send_log("🔊 解除禁言", f"{interaction.user} 解除了 {member} 的禁言", 0x00ff00)
+    except discord.Forbidden:
+        await interaction.response.send_message("❌ 我没有权限解除这个用户的禁言！", ephemeral=True)
+
+# ==================== 💬 消息管理命令 ====================
+@bot.tree.command(name="clear", description="清理频道消息")
+@app_commands.describe(
+    amount="要删除的消息数量（1-100）",
+    user="只删除特定用户的消息（可选）"
+)
+async def clear_slash(interaction: discord.Interaction, amount: int, user: discord.Member = None):
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("❌ 你没有管理消息的权限！", ephemeral=True)
+        return
+
+    if amount > 100 or amount < 1:
+        await interaction.response.send_message("❌ 消息数量必须在1-100之间！", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    try:
+        if user:
+            deleted = await interaction.followup.channel.purge(limit=amount, check=lambda m: m.author == user)
+        else:
+            deleted = await interaction.followup.channel.purge(limit=amount)
+
+        embed = discord.Embed(title="🗑️ 消息已清理", color=0x00ff00, timestamp=datetime.now())
+        embed.add_field(name="删除数量", value=f"{len(deleted)} 条", inline=True)
+        embed.add_field(name="执行者", value=f"{interaction.user}", inline=True)
+        if user:
+            embed.add_field(name="目标用户", value=f"{user}", inline=True)
+
+        # 发送结果消息，3秒后自动删除
+        msg = await interaction.followup.send(embed=embed)
+        await asyncio.sleep(3)
+        await msg.delete()
+
+        log_text = f"{interaction.user} 在 {interaction.channel} 删除了 {len(deleted)} 条消息"
+        if user:
+            log_text += f"（来自 {user}）"
+        await send_log("🗑️ 清理消息", log_text, 0x00ff00)
+
+    except discord.Forbidden:
+        await interaction.followup.send("❌ 我没有权限删除消息！", ephemeral=True)
+
+# ==================== 📢 公告功能 ====================
+@bot.tree.command(name="announce", description="发送服务器公告")
+@app_commands.describe(
+    channel="发送公告的频道",
+    title="公告标题",
+    content="公告内容",
+    mention_everyone="是否@everyone"
+)
+async def announce_slash(interaction: discord.Interaction, channel: discord.TextChannel, title: str, content: str, mention_everyone: bool = False):
+    if not interaction.user.guild_permissions.mention_everyone:
+        await interaction.response.send_message("❌ 你没有发送公告的权限！", ephemeral=True)
+        return
+
+    embed = discord.Embed(title=f"📢 {title}", description=content, color=BOT_COLOR, timestamp=datetime.now())
+    embed.set_footer(text=f"发布者: {interaction.user}", icon_url=interaction.user.display_avatar.url)
+
+    mention_text = "@everyone" if mention_everyone else ""
+    await channel.send(mention_text, embed=embed)
+    await interaction.response.send_message(f"✅ 公告已发送到 {channel.mention}！", ephemeral=True)
+    await send_log("📢 发送公告", f"{interaction.user} 在 {channel} 发送了公告：{title}", BOT_COLOR)
+
+# ==================== 📊 投票功能 ====================
+@bot.tree.command(name="poll", description="创建投票")
+@app_commands.describe(
+    question="投票问题",
+    option1="选项1",
+    option2="选项2",
+    option3="选项3（可选）",
+    option4="选项4（可选）",
+    option5="选项5（可选）"
+)
+async def poll_slash(interaction: discord.Interaction, question: str, option1: str, option2: str, 
+                    option3: str = None, option4: str = None, option5: str = None):
+
+    options = [option1, option2]
+    if option3: options.append(option3)
+    if option4: options.append(option4)
+    if option5: options.append(option5)
+
+    reactions = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣']
+
+    embed = discord.Embed(title="📊 投票", description=question, color=BOT_COLOR, timestamp=datetime.now())
+
+    for i, option in enumerate(options):
+        embed.add_field(name=f"{reactions[i]} 选项 {i+1}", value=option, inline=False)
+
+    embed.set_footer(text=f"发起者: {interaction.user}")
+
+    await interaction.response.send_message(embed=embed)
+    message = await interaction.original_response()
+
+    for i in range(len(options)):
+        await message.add_reaction(reactions[i])
+
+# ==================== ℹ️ 信息查看 ====================
+@bot.tree.command(name="userinfo", description="查看用户信息")
+@app_commands.describe(user="要查看的用户（可选，默认自己）")
+async def userinfo_slash(interaction: discord.Interaction, user: discord.Member = None):
+    if user is None:
+        user = interaction.user
+
+    embed = discord.Embed(title=f"👤 {user.display_name} 的信息", color=BOT_COLOR, timestamp=datetime.now())
+    embed.set_thumbnail(url=user.display_avatar.url)
+    embed.add_field(name="用户名", value=f"{user}", inline=True)
+    embed.add_field(name="ID", value=f"`{user.id}`", inline=True)
+    embed.add_field(name="昵称", value=user.display_name, inline=True)
+    embed.add_field(name="账户创建", value=f"<t:{int(user.created_at.timestamp())}:R>", inline=True)
+    embed.add_field(name="加入时间", value=f"<t:{int(user.joined_at.timestamp())}:R>", inline=True)
+    embed.add_field(name="角色数量", value=f"{len(user.roles)-1}", inline=True)
+    embed.add_field(name="最高角色", value=user.top_role.mention if user.top_role.name != "@everyone" else "无", inline=True)
+
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="serverinfo", description="查看服务器信息")
+async def serverinfo_slash(interaction: discord.Interaction):
+    guild = interaction.guild
+    embed = discord.Embed(title=f"🏠 {guild.name}", color=BOT_COLOR, timestamp=datetime.now())
+
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+
+    embed.add_field(name="服务器ID", value=f"`{guild.id}`", inline=True)
+    embed.add_field(name="所有者", value=f"{guild.owner}", inline=True)
+    embed.add_field(name="创建时间", value=f"<t:{int(guild.created_at.timestamp())}:R>", inline=True)
+    embed.add_field(name="成员数量", value=f"{guild.member_count}", inline=True)
+    embed.add_field(name="频道数量", value=f"{len(guild.channels)}", inline=True)
+    embed.add_field(name="角色数量", value=f"{len(guild.roles)}", inline=True)
+    embed.add_field(name="加成等级", value=f"{guild.premium_tier}", inline=True)
+    embed.add_field(name="加成用户", value=f"{guild.premium_subscription_count}", inline=True)
+
+    await interaction.response.send_message(embed=embed)
+
+# ==================== 🎭 反应角色功能 ====================
+@bot.tree.command(name="setup_roles", description="设置反应角色消息")
+async def setup_roles_slash(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.manage_roles:
+        await interaction.response.send_message("❌ 你没有管理角色的权限！", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title="🎭 选择你的身份组",
+        description="点击下面的表情来获取对应的身份组！",
+        color=BOT_COLOR
+    )
+
+    role_text = ""
+    for emoji, role_name in REACTION_ROLES.items():
+        role_text += f"{emoji} {role_name}\n"
+
+    embed.add_field(name="可选角色", value=role_text, inline=False)
+    embed.set_footer(text="点击表情获取角色，再次点击移除角色")
+
+    await interaction.response.send_message(embed=embed)
+    message = await interaction.original_response()
+
+    for emoji in REACTION_ROLES.keys():
+        await message.add_reaction(emoji)
+
+# ==================== 🚀 一键回顶功能 ====================
+@bot.tree.command(name="top", description="一键回到频道第一条消息")
+async def top_slash(interaction: discord.Interaction):
+    try:
+        # 获取频道的第一条消息
+        messages = []
+        async for message in interaction.channel.history(limit=None, oldest_first=True):
+            messages.append(message)
+            break  # 只要第一条消息
+
+        if not messages:
+            await interaction.response.send_message("❌ 这个频道还没有消息呢！", ephemeral=True)
+            return
+
+        first_message = messages[0]
+
+        # 创建跳转链接
+        jump_url = f"https://discord.com/channels/{interaction.guild.id}/{interaction.channel.id}/{first_message.id}"
+
+        embed = discord.Embed(
+            title="🚀 咻～回到首楼啦！",
+            description=f"[点击这里跳转到第一条消息]({jump_url})",
+            color=BOT_COLOR,
+            timestamp=datetime.now()
+        )
+
+        # 添加一些可爱的随机回复
+        cute_messages = [
+            "🐕 汪！主人回到首楼了呢～",
+            "✨ 传送成功！欢迎回到起点～",
+            "🎉 嗖的一下就回到开头了！",
+            "🌟 时光机启动成功！",
+            "🏃‍♂️ 跑得比光还快！",
+            "🎯 精准定位到第一条消息！"
+        ]
+
+        import random
+        embed.add_field(
+            name="💫 温馨提示", 
+            value=random.choice(cute_messages), 
+            inline=False
+        )
+
+        embed.add_field(
+            name="📅 首楼时间", 
+            value=f"<t:{int(first_message.created_at.timestamp())}:R>", 
+            inline=True
+        )
+
+        embed.add_field(
+            name="👤 楼主", 
+            value=f"{first_message.author.mention}", 
+            inline=True
+        )
+
+        embed.set_footer(text=f"请求者: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+
+        # 发送消息并附带按钮
+        await interaction.response.send_message(embed=embed, view=TopButtonView())
+
+        # 5秒后删除消息（给用户时间看到和点击按钮）
+        await asyncio.sleep(5)
+        try:
+            message = await interaction.original_response()
+            await message.delete()
+        except:
+            pass  # 如果消息已被删除就忽略错误
+
+    except Exception as e:
+        await interaction.response.send_message("❌ 获取第一条消息时出错了！", ephemeral=True)
+
+@bot.tree.command(name="totop", description="快速回到频道第一条消息")
+async def totop_slash(interaction: discord.Interaction):
+    try:
+        # 获取频道的第一条消息
+        messages = []
+        async for message in interaction.channel.history(limit=None, oldest_first=True):
+            messages.append(message)
+            break  # 只要第一条消息
+
+        if not messages:
+            await interaction.response.send_message("❌ 这个频道还没有消息呢！", ephemeral=True)
+            return
+
+        first_message = messages[0]
+
+        # 创建跳转链接
+        jump_url = f"https://discord.com/channels/{interaction.guild.id}/{interaction.channel.id}/{first_message.id}"
+
+        # 更简洁的版本
+        cute_emojis = ["🚀", "✨", "🌟", "💫", "⭐", "🎯", "🏃‍♂️", "🐕"]
+        import random
+
+        emoji = random.choice(cute_emojis)
+        message_text = f"{emoji} {interaction.user.mention} [回到首楼啦！]({jump_url})"
+
+        await interaction.response.send_message(message_text, ephemeral=False)
+
+        # 2秒后删除
+        await asyncio.sleep(2)
+        try:
+            msg = await interaction.original_response()
+            await msg.delete()
+        except:
+            pass
+
+    except Exception as e:
+        await interaction.response.send_message("❌ 获取第一条消息时出错了！", ephemeral=True)
+
+@bot.tree.command(name="topbutton", description="发送一个永久的回首楼按钮")
+async def topbutton_slash(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("❌ 你没有管理消息的权限！", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title="🚀 快速回首楼工具",
+        description="点击下面的按钮可以快速回到频道第一条消息！",
+        color=BOT_COLOR
+    )
+    embed.add_field(name="使用方法", value="点击按钮即可瞬间跳转到频道的第一条消息（首楼）", inline=False)
+    embed.set_footer(text="此按钮永久有效")
+
+    # 使用已定义的持久化按钮视图
+    view = PersistentTopButtonView()
+
+    await interaction.response.send_message(embed=embed, view=view)
+    await interaction.followup.send("✅ 回首楼按钮已设置完成！", ephemeral=True)
+
+    # 记录日志
+    await send_log("🚀 设置回首楼按钮", f"{interaction.user} 在 {interaction.channel} 设置了回首楼按钮", BOT_COLOR)
+
+# ==================== 🆘 帮助命令 ====================
+@bot.tree.command(name="help", description="查看所有可用命令")
+async def help_slash(interaction: discord.Interaction):
+    embed = discord.Embed(title=f"🤖 {BOT_NAME} 命令帮助", color=BOT_COLOR)
+
+    # 审核系统命令（管理员/审核员专用）
     if is_moderator_or_admin(interaction):
-        embed.add_field(name="🔍 审核系统", value="使用审核按钮进行用户审核", inline=False)
+        embed.add_field(
+            name="🔍 审核系统",
+            value="`/approve` - 批准用户\n`/reject` - 拒绝用户\n`/pending` - 待审核列表\n`/reaudit` - 重新审核",
+            inline=False
+        )
 
-    embed.add_field(name="基础命令", value="`/ping` - 检查状态\n`/help` - 查看帮助", inline=False)
+    embed.add_field(
+        name="👥 用户管理",
+        value="`/kick` - 踢出用户\n`/ban` - 封禁用户\n`/timeout` - 禁言用户\n`/untimeout` - 解除禁言",
+        inline=False
+    )
+
+    embed.add_field(
+        name="💬 消息管理",
+        value="`/clear` - 清理消息\n`/announce` - 发送公告",
+        inline=False
+    )
+
+    embed.add_field(
+        name="📊 实用工具",
+        value="`/poll` - 创建投票\n`/userinfo` - 用户信息\n`/serverinfo` - 服务器信息",
+        inline=False
+    )
+
+    embed.add_field(
+        name="🎭 其他功能",
+        value="`/setup_roles` - 设置反应角色\n`/top` - 回到频道首楼\n`/totop` - 快速回首楼\n`/topbutton` - 设置回首楼按钮\n`/ping` - 检查状态",
+        inline=False
+    )
+
     embed.add_field(name="部署平台", value="Vultr - 24小时稳定运行 ✨", inline=False)
-    embed.set_footer(text="现在运行在Vultr上，告别断线烦恼！")
+    embed.set_footer(text="使用斜杠命令 (/) 来调用这些功能！现在运行在Vultr上，告别断线烦恼！")
 
     await interaction.response.send_message(embed=embed)
 
