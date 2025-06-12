@@ -78,7 +78,7 @@ def home():
             <p>✅ 状态: {'在线' if bot.is_ready() else '启动中'}</p>
             <p>🕐 运行时间: {uptime.days}天 {uptime.seconds//3600}小时</p>
             <p>🏠 服务器数: {len(bot.guilds) if bot.is_ready() else 0}</p>
-            <p>🚀 Railway部署成功！</p>
+            <p>🚀 Vultr部署成功！</p>
             <p>🎉 告别断线烦恼！</p>
         </body>
     </html>
@@ -91,7 +91,7 @@ def health():
         "bot_name": BOT_NAME,
         "uptime": str(datetime.now() - bot.start_time),
         "guilds": len(bot.guilds) if bot.is_ready() else 0,
-        "platform": "Railway"
+        "platform": "Vultr"
     })
 
 @app.route('/ping')
@@ -277,7 +277,7 @@ async def ping_command(interaction: discord.Interaction):
     embed = discord.Embed(title="🏓 Pong!", color=BOT_COLOR)
     embed.add_field(name="延迟", value=f"{latency}ms", inline=True)
     embed.add_field(name="运行时间", value=f"{uptime.days}天{uptime.seconds//3600}小时", inline=True)
-    embed.add_field(name="平台", value="Railway ⭐", inline=True)
+    embed.add_field(name="平台", value="Vultr ⭐", inline=True)
 
     await interaction.response.send_message(embed=embed)
 
@@ -289,17 +289,17 @@ async def help_command(interaction: discord.Interaction):
         embed.add_field(name="🔍 审核系统", value="`/ping` - 检查状态", inline=False)
 
     embed.add_field(name="基础命令", value="`/ping` - 检查状态\n`/help` - 查看帮助", inline=False)
-    embed.add_field(name="部署平台", value="Railway - 24小时稳定运行 ✨", inline=False)
-    embed.set_footer(text="现在运行在Railway上，告别断线烦恼！")
+    embed.add_field(name="部署平台", value="Vultr - 24小时稳定运行 ✨", inline=False)
+    embed.set_footer(text="现在运行在Vultr上，告别断线烦恼！")
 
     await interaction.response.send_message(embed=embed)
 
 # ==================== 🎭 事件处理 ====================
 @bot.event
 async def on_ready():
-    print(f'🎯 {bot.user} 已在Railway上线！')
+    print(f'🎯 {bot.user} 已在Vultr上线！')
     print(f'📊 服务器数量: {len(bot.guilds)}')
-    await bot.change_presence(activity=discord.Game(name="🚀 Railway稳定运行"))
+    await bot.change_presence(activity=discord.Game(name="🚀 Vultr稳定运行"))
 
 @bot.event
 async def on_member_join(member):
@@ -392,5 +392,5 @@ if __name__ == "__main__":
         print("❌ 请设置BOT_TOKEN环境变量！")
         exit(1)
 
-    print(f"🚀 在Railway上启动 {BOT_NAME}...")
+    print(f"🚀 在Vultr上启动 {BOT_NAME}...")
     asyncio.run(main())
