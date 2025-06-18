@@ -1931,6 +1931,131 @@ async def remind_audit_slash(interaction: discord.Interaction):
         import traceback
         traceback.print_exc()
 
+@bot.tree.command(name="remind_user", description="提醒指定用户进行审核（仅管理员）")
+@app_commands.describe(member="要提醒的用户")
+async def remind_user_slash(interaction: discord.Interaction, member: discord.Member):
+    # 检查是否为管理员
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ 只有管理员可以使用此命令！", ephemeral=True)
+        return
+
+    # 获取相关角色
+    pending_role = discord.utils.get(interaction.guild.roles, name=PENDING_ROLE_NAME)
+    rejected_role = discord.utils.get(interaction.guild.roles, name=REJECTED_ROLE_NAME)
+
+    # 检查用户是否需要审核
+    has_audit_role = (
+        (pending_role and pending_role in member.roles) or
+        (rejected_role and rejected_role in member.roles)
+    )
+
+    if not has_audit_role:
+        await interaction.response.send_message(f"❌ {member.mention} 不在待审核或被拒绝状态！", ephemeral=True)
+        return
+
+    # 立即响应，避免超时
+    await interaction.response.defer()
+
+    try:
+        # 判断用户状态并发送对应消息
+        if pending_role and pending_role in member.roles:
+            # 待审核用户
+            embed = discord.Embed(
+                title="📋 审核提醒",
+                description=f"你好 {member.mention}！\n\n管理员提醒你在 **{interaction.guild.name}** 的审核申请仍未完成。如需继续申请，请尽快完成资料提交^^",
+                color=0xffa500,
+                timestamp=datetime.now()
+            )
+            
+            embed.add_field(
+                name="📋 需要提交的资料",
+                value="1. 📝 Discord昵称或账号\n2. 📸 支付宝个人信息截图（仅显示性别，其他打码）",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="📸 截图要求",
+                value="请提交支付宝个人信息截图（我的→头像→我的主页→编辑个人资料），仅查看性别，其他信息请自行打码",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="🚀 开始审核",
+                value="点击下方按钮开始提交审核资料！",
+                inline=False
+            )
+            
+            embed.set_footer(text="审核通过后即可访问所有频道！")
+            status_text = "待审核"
+            
+        else:
+            # 被拒绝用户
+            embed = discord.Embed(
+                title="🔄 重新审核提醒",
+                description=f"你好 {member.mention}！\n\n管理员提醒你可以重新提交审核资料。你在 **{interaction.guild.name}** 的审核之前未通过，如需继续申请，现在可以重新提交^^",
+                color=0xff6600,
+                timestamp=datetime.now()
+            )
+            
+            embed.add_field(
+                name="📋 重新提交步骤",
+                value="1. 📝 填写Discord信息\n2. 📸 重新上传支付宝截图\n3. ✅ 提交审核\n\n**注意：需要重新上传截图！**",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="📸 截图要求",
+                value="支付宝APP → 我的 → 头像 → 我的主页 → 编辑个人资料\n**仅显示性别，其他信息请打码处理**",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="💡 提示",
+                value="请确保提交的资料符合要求，以便顺利通过审核！",
+                inline=False
+            )
+            
+            embed.set_footer(text="点击下方按钮重新开始审核流程")
+            status_text = "被拒绝"
+
+        # 发送私信并附带审核按钮
+        await member.send(embed=embed, view=UserAuditView())
+
+        # 创建成功回复
+        success_embed = discord.Embed(
+            title="✅ 提醒已发送",
+            description=f"已成功向 {member.mention} 发送审核提醒！",
+            color=0x00ff00,
+            timestamp=datetime.now()
+        )
+        success_embed.add_field(name="👤 目标用户", value=f"{member}", inline=True)
+        success_embed.add_field(name="📊 用户状态", value=status_text, inline=True)
+        success_embed.add_field(name="🛡️ 执行者", value=f"{interaction.user}", inline=True)
+
+        await interaction.edit_original_response(embed=success_embed)
+
+        # 记录日志
+        log_text = f"{interaction.user} 提醒了 {member} 进行审核（状态：{status_text}）"
+        await send_log("📢 单独审核提醒", log_text, 0x00ff00)
+
+    except discord.Forbidden:
+        error_embed = discord.Embed(
+            title="❌ 发送失败",
+            description=f"无法向 {member.mention} 发送私信！\n\n**原因：** 用户可能关闭了私信功能",
+            color=0xff0000,
+            timestamp=datetime.now()
+        )
+        error_embed.add_field(name="💡 建议", value="请尝试其他方式联系用户", inline=False)
+        
+        await interaction.edit_original_response(embed=error_embed)
+        
+    except Exception as e:
+        error_message = f"❌ 提醒时出现错误: {e}"
+        await interaction.edit_original_response(content=error_message)
+        print(f"单独提醒错误: {e}")
+        import traceback
+        traceback.print_exc()
+
 @bot.tree.command(name="help", description="查看所有可用命令")
 async def help_slash(interaction: discord.Interaction):
     embed = discord.Embed(title=f"🤖 {BOT_NAME} 命令帮助", color=BOT_COLOR)
@@ -1946,7 +2071,7 @@ async def help_slash(interaction: discord.Interaction):
     if interaction.user.guild_permissions.administrator:
         embed.add_field(
             name="🛠️ 调试工具",
-            value="`/debug` - 检查权限配置\n`/testjoin` - 测试新成员加入",
+            value="`/debug` - 检查权限配置\n`/testjoin` - 测试新成员加入\n`/remind_audit` - 批量提醒审核\n`/remind_user` - 提醒单个用户审核",
             inline=False
         )
 
