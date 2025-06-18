@@ -54,6 +54,10 @@ class MyBot(commands.Bot):
 
 bot = MyBot()
 
+# ==================== 📷 用户图片存储系统 ====================
+# 用户图片存储字典（临时存储）
+user_images = {}
+
 # ==================== 📝 日志功能 ====================
 async def send_log(title: str, description: str, color: int = 0x36393f):
     """发送日志到指定频道"""
@@ -117,7 +121,7 @@ class UserInfoModal(discord.ui.Modal, title='📝 提交个人信息'):
 
     discord_info = discord.ui.TextInput(
         label='Discord昵称或账号',
-        placeholder='请输入你的Discord昵称或完整账号',
+        placeholder='请输入你的Discord昵称或账号',
         required=True,
         max_length=200
     )
@@ -152,14 +156,13 @@ class UserAuditView(discord.ui.View):
         super().__init__(timeout=None)
         self.discord_info = None
         self.additional_info = None
-        self.submitted_image = None
 
-    @discord.ui.button(label="填写文字信息", style=discord.ButtonStyle.primary, emoji="📝", custom_id="user_text_info")
+    @discord.ui.button(label="📝 填写文字信息", style=discord.ButtonStyle.primary, emoji="📝", custom_id="user_text_info")
     async def submit_text_info(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = UserInfoModal(self)
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="上传支付宝截图", style=discord.ButtonStyle.secondary, emoji="📸", custom_id="user_upload_image")
+    @discord.ui.button(label="📸 上传支付宝截图", style=discord.ButtonStyle.secondary, emoji="📸", custom_id="user_upload_image")
     async def upload_image_instruction(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(
             title="📸 上传支付宝截图",
@@ -173,21 +176,23 @@ class UserAuditView(discord.ui.View):
         )
         embed.add_field(
             name="📎 上传方式",
-            value="请直接在此私信频道发送截图文件，本门神会自动识别并提交给管理员审核哼哼^^（先上传截图再填写文字信息！！不然会出bug！！）",
+            value="请直接在此私信频道发送截图文件，我会自动识别并提交给管理员审核。",
             inline=False
         )
         embed.set_footer(text="💡 提示：确保截图清晰且隐私信息已打码")
 
         await interaction.response.edit_message(embed=embed, view=self)
 
-    @discord.ui.button(label="提交审核", style=discord.ButtonStyle.success, emoji="✅", custom_id="user_submit_audit")
+    @discord.ui.button(label="✅ 提交审核", style=discord.ButtonStyle.success, emoji="✅", custom_id="user_submit_audit")
     async def submit_audit(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.discord_info:
             await interaction.response.send_message("❌ 请先填写文字信息！", ephemeral=True)
             return
 
-        if not self.submitted_image:
-            await interaction.response.send_message("❌ 请先上传截图！", ephemeral=True)
+        # 检查用户是否上传了图片
+        user_image_data = user_images.get(interaction.user.id)
+        if not user_image_data:
+            await interaction.response.send_message("❌ 请先上传支付宝截图！", ephemeral=True)
             return
 
         # 准备发送到审核频道
@@ -217,9 +222,14 @@ class UserAuditView(discord.ui.View):
             guild = bot.get_guild(GUILD_ID)
             member = guild.get_member(interaction.user.id) if guild else None
             
+            # 从字典中创建新的文件对象
             files = []
-            if self.submitted_image:
-                files.append(self.submitted_image)
+            if user_image_data:
+                image_file = discord.File(
+                    io.BytesIO(user_image_data['data']), 
+                    filename=user_image_data['filename']
+                )
+                files.append(image_file)
 
             await audit_channel.send(
                 embed=embed, 
@@ -227,10 +237,14 @@ class UserAuditView(discord.ui.View):
                 view=AuditView(member)
             )
 
+            # 清理用户图片数据（提交后删除）
+            if interaction.user.id in user_images:
+                del user_images[interaction.user.id]
+
             # 回复用户
             success_embed = discord.Embed(
                 title="✅ 审核资料已提交",
-                description="你的资料已成功提交给管理员审核，请等待审核结果^^感谢！",
+                description="你的资料已成功提交给管理员审核，请耐心等待审核结果。",
                 color=0x00ff00
             )
             success_embed.add_field(name="📝 已提交信息", value=f"Discord信息：{self.discord_info}", inline=False)
@@ -252,13 +266,18 @@ class UserAuditView(discord.ui.View):
         except Exception as e:
             await interaction.response.send_message(f"❌ 提交失败：{e}", ephemeral=True)
             print(f"审核提交错误: {e}")
+            import traceback
+            traceback.print_exc()
 
-    @discord.ui.button(label="重新提交", style=discord.ButtonStyle.secondary, emoji="🔄", custom_id="user_resubmit")
+    @discord.ui.button(label="🔄 重新提交", style=discord.ButtonStyle.secondary, emoji="🔄", custom_id="user_resubmit")
     async def resubmit(self, interaction: discord.Interaction, button: discord.ui.Button):
         # 重置所有信息
         self.discord_info = None
         self.additional_info = None
-        self.submitted_image = None
+        
+        # 清理用户图片数据
+        if interaction.user.id in user_images:
+            del user_images[interaction.user.id]
 
         # 启用提交按钮
         for item in self.children:
@@ -271,7 +290,7 @@ class UserAuditView(discord.ui.View):
         )
         embed.add_field(
             name="📋 需要提交的资料",
-            value="1. 📝 Discord昵称或账号\n2. 📸 支付宝个人信息截图（仅显示性别，其他请注意打码）",
+            value="1. 📝 Discord昵称或账号\n2. 📸 支付宝个人信息截图（仅显示性别，其他打码）",
             inline=False
         )
         embed.add_field(
@@ -618,7 +637,7 @@ async def on_member_join(member):
             try:
                 embed = discord.Embed(
                     title="🎉 欢迎加入小动物烘焙坊！",
-                    description=f"你好 {member.mention}！欢迎加入我们的服务器！\n\n为了确保社区安全，请提交一些资料（支付宝性别截图，仅查看性别）进行审核^^感谢理解！",
+                    description=f"你好 {member.mention}！欢迎加入我们的服务器！\n\n该社区为女性专属社区，需要提交一些资料进行审核^^感谢理解！",
                     color=BOT_COLOR,
                     timestamp=datetime.now()
                 )
@@ -675,6 +694,9 @@ async def on_member_join(member):
         print(f"❌ [DEBUG] 找不到'{PENDING_ROLE_NAME}'角色")
         await send_log("❌ 角色错误", f"找不到'{PENDING_ROLE_NAME}'角色", 0xff0000)
 
+# 用户图片存储字典（临时存储）
+user_images = {}
+
 # 监听私信中的图片上传
 @bot.event
 async def on_message(message):
@@ -695,22 +717,23 @@ async def on_message(message):
                     if message.attachments:
                         for attachment in message.attachments:
                             if attachment.content_type and attachment.content_type.startswith('image/'):
-                                # 找到用户的审核视图（这里简化处理，实际可能需要更复杂的状态管理）
-                                # 下载图片并准备转发
                                 try:
+                                    # 下载图片数据并存储到字典中
                                     image_data = await attachment.read()
-                                    image_file = discord.File(io.BytesIO(image_data), filename=attachment.filename)
+                                    user_images[message.author.id] = {
+                                        'data': image_data,
+                                        'filename': attachment.filename
+                                    }
                                     
                                     # 创建确认消息
                                     embed = discord.Embed(
                                         title="📸 图片已接收",
-                                        description="你的图片文件已接收！现在请确保：\n\n1. 📝 已填写Discord信息\n2. 📸 已上传支付宝截图\n\n然后点击'提交审核'按钮完成提交。",
+                                        description="你的支付宝截图已接收！现在请确保：\n\n1. 📝 已填写Discord信息\n2. 📸 已上传支付宝截图\n\n然后点击'提交审核'按钮完成提交。",
                                         color=0x00ff00
                                     )
                                     
-                                    # 创建新的视图实例并设置图片
+                                    # 创建新的视图实例
                                     user_view = UserAuditView()
-                                    user_view.submitted_image = image_file
                                     
                                     await message.channel.send(embed=embed, view=user_view)
                                     
@@ -1609,9 +1632,9 @@ async def help_slash(interaction: discord.Interaction):
         inline=False
     )
 
-    embed.add_field(name="部署平台", value="Vultr", inline=False)
-    embed.add_field(name="🆕 新功能", value="私信审核系统", inline=False)
-    embed.set_footer(text="使用斜杠命令 (/) 来调用这些功能！")
+    embed.add_field(name="部署平台", value="Vultr - 24小时稳定运行 ✨", inline=False)
+    embed.add_field(name="🆕 新功能", value="私信审核系统 - 更安全的资料提交方式！", inline=False)
+    embed.set_footer(text="使用斜杠命令 (/) 来调用这些功能！现在运行在Vultr上，告别断线烦恼！")
 
     await interaction.response.send_message(embed=embed)
 
