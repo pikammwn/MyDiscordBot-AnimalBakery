@@ -11,7 +11,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 GUILD_ID = 1379882513106866226
 WELCOME_CHANNEL_ID = 1381960351704420392
 LOG_CHANNEL_ID = 1379882514339987520
-AUDIT_CHANNEL_ID = 1384936557986713620
+AUDIT_CHANNEL_ID = 1381997594242449428
 ROLE_CHANGE_CHANNEL_ID =1379882890795548743
 
 # ==================== 🎨 审核系统配置 🎨 ====================
@@ -113,6 +113,140 @@ async def send_audit_message(title: str, description: str, color: int = 0x36393f
         )
         await audit_channel.send(embed=embed)
 
+# ==================== 📝 拒绝理由填写模态框 ====================
+class RejectReasonModal(discord.ui.Modal, title='📝 填写拒绝理由'):
+    def __init__(self, member: discord.Member, original_view, select_view):
+        super().__init__()
+        self.member = member
+        self.original_view = original_view
+        self.select_view = select_view
+
+    reject_reason = discord.ui.TextInput(
+        label='拒绝理由',
+        placeholder='请详细说明拒绝的具体原因...',
+        required=True,
+        max_length=500,
+        style=discord.TextStyle.paragraph
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # 获取选择的操作类型
+        action = getattr(self.select_view, 'selected_action', 'keep')
+        reason = self.reject_reason.value
+        
+        # 立即响应交互，避免超时
+        await interaction.response.defer()
+        
+        try:
+            # 获取相关角色
+            pending_role = discord.utils.get(interaction.guild.roles, name=PENDING_ROLE_NAME)
+            rejected_role = discord.utils.get(interaction.guild.roles, name=REJECTED_ROLE_NAME)
+            verified_role = discord.utils.get(interaction.guild.roles, name=VERIFIED_ROLE_NAME)
+
+            if action == "keep":
+                # 保留但标记为被拒绝
+                roles_to_remove = [role for role in [pending_role, verified_role] if role in self.member.roles]
+                if roles_to_remove:
+                    await self.member.remove_roles(*roles_to_remove)
+                if rejected_role:
+                    await self.member.add_roles(rejected_role)
+                action_text = "已标记为被拒绝用户"
+                color = 0xff6600
+
+                # 清理用户之前的图片数据（重新审核需要重新上传）
+                if self.member.id in user_images:
+                    del user_images[self.member.id]
+
+                # 发私信通知可以重新提交
+                try:
+                    dm_embed = discord.Embed(
+                        title="❌ 审核未通过",
+                        description=f"很抱歉，你在 **{interaction.guild.name}** 的审核未通过。",
+                        color=0xff0000
+                    )
+                    dm_embed.add_field(name="📝 拒绝理由", value=reason, inline=False)
+                    dm_embed.add_field(
+                        name="🔄 重新提交",
+                        value="你可以重新提交审核资料，请确保：\n1. Discord信息准确\n2. 支付宝截图性别信息清晰且其他信息已打码\n\n点击下方按钮重新开始审核流程。",
+                        inline=False
+                    )
+                    
+                    # 发送带重新提交按钮的消息
+                    await self.member.send(embed=dm_embed, view=UserAuditView())
+                except discord.Forbidden:
+                    pass
+
+            elif action == "kick":
+                # 踢出服务器前清理数据
+                if self.member.id in user_images:
+                    del user_images[self.member.id]
+                await self.member.kick(reason=f"审核被拒绝：{reason}")
+                action_text = "已踢出服务器"
+                color = 0xff9900
+
+            elif action == "ban":
+                # 封禁用户前清理数据
+                if self.member.id in user_images:
+                    del user_images[self.member.id]
+                await self.member.ban(reason=f"审核被拒绝：{reason}")
+                action_text = "已封禁用户"
+                color = 0xff0000
+
+            # 创建成功消息
+            success_message = f"✅ 操作完成！{self.member} {action_text}\n拒绝理由：{reason}"
+            
+            # 编辑原始交互消息
+            await interaction.edit_original_response(content=success_message, view=None)
+
+            # 创建拒绝消息embed
+            embed = discord.Embed(
+                title="❌ 审核被拒绝",
+                description=f"💔 {self.member.mention} 的审核未通过",
+                color=color,
+                timestamp=datetime.now()
+            )
+            embed.add_field(name="👤 用户", value=f"{self.member}", inline=True)
+            embed.add_field(name="🛡️ 审核员", value=f"{interaction.user}", inline=True)
+            embed.add_field(name="📝 拒绝理由", value=reason, inline=False)
+            embed.add_field(name="⚡ 操作", value=action_text, inline=False)
+
+            # 禁用原消息的按钮
+            for item in self.original_view.children:
+                item.disabled = True
+
+            # 尝试更新原始审核消息
+            try:
+                # 获取原始消息并更新
+                audit_channel = bot.get_channel(AUDIT_CHANNEL_ID)
+                if audit_channel:
+                    # 查找包含该用户ID的最新审核消息
+                    async for msg in audit_channel.history(limit=50):
+                        if msg.embeds and f"`{self.member.id}`" in msg.embeds[0].description:
+                            await msg.edit(embed=embed, view=self.original_view)
+                            break
+                    else:
+                        # 如果找不到原消息，发送新消息
+                        await audit_channel.send(embed=embed)
+            except Exception as e:
+                print(f"警告: 无法更新原始消息: {e}")
+                # 发送到审核频道作为备选
+                audit_channel = bot.get_channel(AUDIT_CHANNEL_ID)
+                if audit_channel:
+                    await audit_channel.send(embed=embed)
+
+            # 记录日志
+            await send_log("❌ 审核拒绝", f"{interaction.user} 拒绝了 {self.member}\n理由：{reason}\n操作：{action_text}", color)
+
+        except discord.Forbidden as e:
+            error_message = f"❌ 权限不足！无法执行此操作: {e}"
+            await interaction.edit_original_response(content=error_message, view=None)
+        except Exception as e:
+            error_message = f"❌ 操作失败: {e}"
+            await interaction.edit_original_response(content=error_message, view=None)
+            print(f"拒绝操作错误: {e}")
+            import traceback
+            traceback.print_exc()
+
 # ==================== 📝 用户信息输入模态框 ====================
 class UserInfoModal(discord.ui.Modal, title='📝 提交个人信息'):
     def __init__(self, user_view):
@@ -121,7 +255,7 @@ class UserInfoModal(discord.ui.Modal, title='📝 提交个人信息'):
 
     discord_info = discord.ui.TextInput(
         label='Discord昵称或账号',
-        placeholder='请输入你的Discord昵称或账号',
+        placeholder='请输入你的Discord昵称或完整账号',
         required=True,
         max_length=200
     )
@@ -157,12 +291,12 @@ class UserAuditView(discord.ui.View):
         self.discord_info = None
         self.additional_info = None
 
-    @discord.ui.button(label="📝 填写文字信息", style=discord.ButtonStyle.primary, emoji="📝", custom_id="user_text_info")
+    @discord.ui.button(label="填写文字信息", style=discord.ButtonStyle.primary, emoji="📝", custom_id="user_text_info")
     async def submit_text_info(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = UserInfoModal(self)
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="📸 上传支付宝截图", style=discord.ButtonStyle.secondary, emoji="📸", custom_id="user_upload_image")
+    @discord.ui.button(label="上传支付宝截图", style=discord.ButtonStyle.secondary, emoji="📸", custom_id="user_upload_image")
     async def upload_image_instruction(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(
             title="📸 上传支付宝截图",
@@ -176,14 +310,14 @@ class UserAuditView(discord.ui.View):
         )
         embed.add_field(
             name="📎 上传方式",
-            value="请直接在此私信频道发送截图文件，我会自动识别并提交给管理员审核。",
+            value="请直接在此私信频道发送截图文件，本门神会自动识别并提交给管理员审核的哼哼^^",
             inline=False
         )
         embed.set_footer(text="💡 提示：确保截图清晰且隐私信息已打码")
 
         await interaction.response.edit_message(embed=embed, view=self)
 
-    @discord.ui.button(label="✅ 提交审核", style=discord.ButtonStyle.success, emoji="✅", custom_id="user_submit_audit")
+    @discord.ui.button(label="提交审核", style=discord.ButtonStyle.success, emoji="✅", custom_id="user_submit_audit")
     async def submit_audit(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.discord_info:
             await interaction.response.send_message("❌ 请先填写文字信息！", ephemeral=True)
@@ -244,7 +378,7 @@ class UserAuditView(discord.ui.View):
             # 回复用户
             success_embed = discord.Embed(
                 title="✅ 审核资料已提交",
-                description="你的资料已成功提交给管理员审核，请耐心等待审核结果。",
+                description="你的资料已成功提交给管理员审核，请耐心等待审核结果…",
                 color=0x00ff00
             )
             success_embed.add_field(name="📝 已提交信息", value=f"Discord信息：{self.discord_info}", inline=False)
@@ -269,7 +403,7 @@ class UserAuditView(discord.ui.View):
             import traceback
             traceback.print_exc()
 
-    @discord.ui.button(label="🔄 重新提交", style=discord.ButtonStyle.secondary, emoji="🔄", custom_id="user_resubmit")
+    @discord.ui.button(label="重新提交", style=discord.ButtonStyle.secondary, emoji="🔄", custom_id="user_resubmit")
     async def resubmit(self, interaction: discord.Interaction, button: discord.ui.Button):
         # 重置所有信息
         self.discord_info = None
@@ -285,7 +419,7 @@ class UserAuditView(discord.ui.View):
 
         embed = discord.Embed(
             title="🔄 重新提交审核",
-            description="你可以重新填写信息和上传截图。",
+            description="你可以重新填写信息和上传截图，请注意要求哦！！",
             color=BOT_COLOR
         )
         embed.add_field(
@@ -637,7 +771,7 @@ async def on_member_join(member):
             try:
                 embed = discord.Embed(
                     title="🎉 欢迎加入小动物烘焙坊！",
-                    description=f"你好 {member.mention}！欢迎加入我们的服务器！\n\n该社区为女性专属社区，需要提交一些资料进行审核^^感谢理解！",
+                    description=f"你好 {member.mention}！欢迎加入我们的服务器！\n\n本社区为女性专属社区，需要提交一些资料进行审核^^感谢理解！！",
                     color=BOT_COLOR,
                     timestamp=datetime.now()
                 )
@@ -947,6 +1081,11 @@ async def reaudit_member(interaction: discord.Interaction, member: discord.Membe
         await member.remove_roles(rejected_role)
         await member.add_roles(pending_role)
 
+        # 清理用户之前的图片数据（重新审核需要重新上传）
+        if member.id in user_images:
+            del user_images[member.id]
+            print(f"🔍 [DEBUG] 清理了用户 {member} 的旧图片数据")
+
         embed = discord.Embed(
             title="🔄 重新审核",
             description=f"{member.mention} 已重新进入审核流程",
@@ -963,6 +1102,11 @@ async def reaudit_member(interaction: discord.Interaction, member: discord.Membe
                 title="🔄 重新审核机会",
                 description=f"管理员已为你重新开启审核流程，你可以重新提交审核资料。",
                 color=0xffa500
+            )
+            dm_embed.add_field(
+                name="📋 重新提交步骤",
+                value="1. 📝 填写Discord信息\n2. 📸 重新上传支付宝截图\n3. ✅ 提交审核\n\n**注意：需要重新上传截图！**",
+                inline=False
             )
             await member.send(embed=dm_embed, view=UserAuditView())
         except discord.Forbidden:
