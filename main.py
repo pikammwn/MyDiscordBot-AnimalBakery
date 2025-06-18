@@ -771,7 +771,7 @@ async def on_member_join(member):
             try:
                 embed = discord.Embed(
                     title="🎉 欢迎加入小动物烘焙坊！",
-                    description=f"你好 {member.mention}！欢迎加入我们的服务器！\n\n本社区为女性专属社区，需要提交一些资料进行审核^^感谢理解！！",
+                    description=f"你好 {member.mention}！欢迎加入我们的服务器！\n\n本社区为女性专属社区，需要提交一些资料进行审核，如遇bug或有任何疑问请私戳管理员进行其他方式审核^^感谢理解！！",
                     color=BOT_COLOR,
                     timestamp=datetime.now()
                 )
@@ -1740,6 +1740,171 @@ async def test_join_command(interaction: discord.Interaction):
         await interaction.response.send_message("✅ 测试完成！请检查控制台输出和审核频道。", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ 测试时出错: {e}", ephemeral=True)
+
+# ==================== 📢 批量审核提醒功能 ====================
+
+@bot.tree.command(name="remind_audit", description="批量提醒待审核和被拒绝用户进行审核（仅管理员）")
+async def remind_audit_slash(interaction: discord.Interaction):
+    # 检查是否为管理员
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ 只有管理员可以使用此命令！", ephemeral=True)
+        return
+
+    # 立即响应，避免超时
+    await interaction.response.defer()
+
+    # 获取相关角色
+    pending_role = discord.utils.get(interaction.guild.roles, name=PENDING_ROLE_NAME)
+    rejected_role = discord.utils.get(interaction.guild.roles, name=REJECTED_ROLE_NAME)
+
+    if not pending_role and not rejected_role:
+        await interaction.edit_original_response(content="❌ 找不到待审核或被拒绝角色！请检查配置。")
+        return
+
+    # 收集需要提醒的用户
+    pending_members = []
+    rejected_members = []
+
+    if pending_role:
+        pending_members = [member for member in interaction.guild.members if pending_role in member.roles]
+    
+    if rejected_role:
+        rejected_members = [member for member in interaction.guild.members if rejected_role in member.roles]
+
+    total_users = len(pending_members) + len(rejected_members)
+
+    if total_users == 0:
+        await interaction.edit_original_response(content="✅ 当前没有需要提醒的用户。")
+        return
+
+    # 统计变量
+    success_count = 0
+    failed_count = 0
+    failed_users = []
+
+    try:
+        # 处理待审核用户
+        for member in pending_members:
+            try:
+                embed = discord.Embed(
+                    title="📋 审核提醒",
+                    description=f"你好 {member.mention}！\n\n你在 **{interaction.guild.name}** 的审核申请仍未发送。如需继续申请，请尽快完成资料提交^^",
+                    color=0xffa500,
+                    timestamp=datetime.now()
+                )
+                
+                embed.add_field(
+                    name="📋 需要提交的资料",
+                    value="1. 📝 Discord昵称或账号\n2. 📸 支付宝个人信息截图（仅显示性别，其他打码）",
+                    inline=False
+                )
+                
+                embed.add_field(
+                    name="📸 截图要求",
+                    value="请提交支付宝个人信息截图（我的→头像→我的主页→编辑个人资料），仅查看性别，其他信息请自行打码",
+                    inline=False
+                )
+                
+                embed.add_field(
+                    name="🚀 开始审核",
+                    value="点击下方按钮开始提交审核资料！",
+                    inline=False
+                )
+                
+                embed.set_footer(text="审核通过后即可访问所有频道！")
+
+                # 发送私信并附带审核按钮
+                await member.send(embed=embed, view=UserAuditView())
+                success_count += 1
+
+            except discord.Forbidden:
+                failed_count += 1
+                failed_users.append(f"{member} (待审核)")
+            except Exception as e:
+                failed_count += 1
+                failed_users.append(f"{member} (待审核) - 错误: {e}")
+
+        # 处理被拒绝用户
+        for member in rejected_members:
+            try:
+                embed = discord.Embed(
+                    title="🔄 重新审核提醒",
+                    description=f"你好 {member.mention}！\n\n你在 **{interaction.guild.name}** 的审核之前未通过，如需重新申请请重新提交审核资料^^",
+                    color=0xff6600,
+                    timestamp=datetime.now()
+                )
+                
+                embed.add_field(
+                    name="📋 重新提交步骤",
+                    value="1. 📝 填写Discord信息\n2. 📸 重新上传支付宝截图\n3. ✅ 提交审核\n\n**注意：需要重新上传截图！**",
+                    inline=False
+                )
+                
+                embed.add_field(
+                    name="📸 截图要求",
+                    value="支付宝APP → 我的 → 头像 → 我的主页 → 编辑个人资料\n**仅显示性别，其他信息请打码处理**",
+                    inline=False
+                )
+                
+                embed.add_field(
+                    name="💡 提示",
+                    value="请确保提交的资料符合要求，以便顺利通过审核！",
+                    inline=False
+                )
+                
+                embed.set_footer(text="点击下方按钮重新开始审核流程")
+
+                # 发送私信并附带审核按钮
+                await member.send(embed=embed, view=UserAuditView())
+                success_count += 1
+
+            except discord.Forbidden:
+                failed_count += 1
+                failed_users.append(f"{member} (被拒绝)")
+            except Exception as e:
+                failed_count += 1
+                failed_users.append(f"{member} (被拒绝) - 错误: {e}")
+
+        # 创建结果报告
+        result_embed = discord.Embed(
+            title="📢 批量审核提醒完成",
+            color=0x00ff00 if failed_count == 0 else 0xffa500,
+            timestamp=datetime.now()
+        )
+        
+        result_embed.add_field(name="📊 统计", value=f"总计用户: {total_users}\n成功发送: {success_count}\n发送失败: {failed_count}", inline=True)
+        result_embed.add_field(name="👥 用户分布", value=f"待审核: {len(pending_members)}\n被拒绝: {len(rejected_members)}", inline=True)
+        result_embed.add_field(name="🛡️ 执行者", value=f"{interaction.user}", inline=True)
+
+        if failed_users:
+            # 如果失败用户太多，只显示前10个
+            failed_display = failed_users[:10]
+            if len(failed_users) > 10:
+                failed_display.append(f"... 及其他 {len(failed_users) - 10} 位用户")
+            
+            result_embed.add_field(
+                name="❌ 发送失败的用户",
+                value="\n".join(failed_display),
+                inline=False
+            )
+            result_embed.add_field(
+                name="💡 失败原因",
+                value="通常是因为用户关闭了私信功能",
+                inline=False
+            )
+
+        await interaction.edit_original_response(embed=result_embed)
+
+        # 记录日志
+        log_text = f"{interaction.user} 批量提醒了 {total_users} 位用户进行审核（成功: {success_count}, 失败: {failed_count}）"
+        await send_log("📢 批量审核提醒", log_text, 0x00ff00 if failed_count == 0 else 0xffa500)
+
+    except Exception as e:
+        error_message = f"❌ 批量提醒时出现错误: {e}"
+        await interaction.edit_original_response(content=error_message)
+        print(f"批量提醒错误: {e}")
+        import traceback
+        traceback.print_exc()
 
 @bot.tree.command(name="help", description="查看所有可用命令")
 async def help_slash(interaction: discord.Interaction):
