@@ -154,12 +154,12 @@ class UserAuditView(discord.ui.View):
         self.additional_info = None
         self.submitted_image = None
 
-    @discord.ui.button(label="📝 填写文字信息", style=discord.ButtonStyle.primary, emoji="📝", custom_id="user_text_info")
+    @discord.ui.button(label="填写文字信息", style=discord.ButtonStyle.primary, emoji="📝", custom_id="user_text_info")
     async def submit_text_info(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = UserInfoModal(self)
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="📸 上传支付宝截图", style=discord.ButtonStyle.secondary, emoji="📸", custom_id="user_upload_image")
+    @discord.ui.button(label="上传支付宝截图", style=discord.ButtonStyle.secondary, emoji="📸", custom_id="user_upload_image")
     async def upload_image_instruction(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(
             title="📸 上传支付宝截图",
@@ -173,14 +173,14 @@ class UserAuditView(discord.ui.View):
         )
         embed.add_field(
             name="📎 上传方式",
-            value="请直接在此私信频道发送截图文件，本门神会自动识别并提交给管理员审核哼哼^^",
+            value="请直接在此私信频道发送截图文件，本门神会自动识别并提交给管理员审核哼哼^^（先上传截图再填写文字信息！！不然会出bug！！）",
             inline=False
         )
         embed.set_footer(text="💡 提示：确保截图清晰且隐私信息已打码")
 
         await interaction.response.edit_message(embed=embed, view=self)
 
-    @discord.ui.button(label="✅ 提交审核", style=discord.ButtonStyle.success, emoji="✅", custom_id="user_submit_audit")
+    @discord.ui.button(label="提交审核", style=discord.ButtonStyle.success, emoji="✅", custom_id="user_submit_audit")
     async def submit_audit(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.discord_info:
             await interaction.response.send_message("❌ 请先填写文字信息！", ephemeral=True)
@@ -253,7 +253,7 @@ class UserAuditView(discord.ui.View):
             await interaction.response.send_message(f"❌ 提交失败：{e}", ephemeral=True)
             print(f"审核提交错误: {e}")
 
-    @discord.ui.button(label="🔄 重新提交", style=discord.ButtonStyle.secondary, emoji="🔄", custom_id="user_resubmit")
+    @discord.ui.button(label="重新提交", style=discord.ButtonStyle.secondary, emoji="🔄", custom_id="user_resubmit")
     async def resubmit(self, interaction: discord.Interaction, button: discord.ui.Button):
         # 重置所有信息
         self.discord_info = None
