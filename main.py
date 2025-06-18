@@ -10,8 +10,9 @@ import os
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GUILD_ID = 1379882513106866226
 WELCOME_CHANNEL_ID = 1381960351704420392
-LOG_CHANNEL_ID = 1379882514339987520
-AUDIT_CHANNEL_ID = 1384936557986713620
+LOG_CHANNEL_ID = 1379882514339987520                    # 一般日志频道（审核通过、公告等）
+PUNISHMENT_LOG_CHANNEL_ID = 1384971009655832689         # 🆕 处罚日志频道（踢出、封禁、禁言等）
+AUDIT_CHANNEL_ID = 1381997594242449428
 ROLE_CHANGE_CHANNEL_ID =1379882890795548743
 
 # ==================== 🎨 审核系统配置 🎨 ====================
@@ -60,7 +61,7 @@ user_images = {}
 
 # ==================== 📝 日志功能 ====================
 async def send_log(title: str, description: str, color: int = 0x36393f):
-    """发送日志到指定频道"""
+    """发送一般日志到指定频道（审核通过、公告、系统信息等）"""
     log_channel = bot.get_channel(LOG_CHANNEL_ID)
     if log_channel:
         embed = discord.Embed(
@@ -70,6 +71,22 @@ async def send_log(title: str, description: str, color: int = 0x36393f):
             timestamp=datetime.now()
         )
         await log_channel.send(embed=embed)
+
+async def send_punishment_log(title: str, description: str, color: int = 0xff0000):
+    """🆕 发送处罚日志到专门的处罚频道（踢出、封禁、禁言、审核拒绝等）"""
+    punishment_channel = bot.get_channel(PUNISHMENT_LOG_CHANNEL_ID)
+    if punishment_channel:
+        embed = discord.Embed(
+            title=title,
+            description=description,
+            color=color,
+            timestamp=datetime.now()
+        )
+        embed.set_footer(text="⚠️ 处罚记录")
+        await punishment_channel.send(embed=embed)
+    else:
+        # 如果处罚频道不存在，回退到一般日志频道
+        await send_log(title, description, color)
 
 # ==================== 🎭 角色变化通知功能 ====================
 async def send_role_change(title: str, description: str, color: int = 0x36393f):
@@ -234,8 +251,8 @@ class RejectReasonModal(discord.ui.Modal, title='📝 填写拒绝理由'):
                 if audit_channel:
                     await audit_channel.send(embed=embed)
 
-            # 记录日志
-            await send_log("❌ 审核拒绝", f"{interaction.user} 拒绝了 {self.member}\n理由：{reason}\n操作：{action_text}", color)
+            # 🆕 修改：使用处罚日志频道
+            await send_punishment_log("❌ 审核拒绝", f"{interaction.user} 拒绝了 {self.member}\n理由：{reason}\n操作：{action_text}", color)
 
         except discord.Forbidden as e:
             error_message = f"❌ 权限不足！无法执行此操作: {e}"
@@ -682,8 +699,8 @@ class RejectActionView(discord.ui.View):
                 if audit_channel:
                     await audit_channel.send(embed=embed)
 
-            # 记录日志
-            await send_log("❌ 审核拒绝", f"{interaction.user} 拒绝了 {self.member}\n操作：{action_text}", color)
+            # 🆕 修改：使用处罚日志频道
+            await send_punishment_log("❌ 审核拒绝", f"{interaction.user} 拒绝了 {self.member}\n操作：{action_text}", color)
 
         except discord.Forbidden as e:
             error_message = f"❌ 权限不足！无法执行此操作: {e}"
@@ -720,11 +737,13 @@ async def on_ready():
         audit_channel = bot.get_channel(AUDIT_CHANNEL_ID)
         welcome_channel = bot.get_channel(WELCOME_CHANNEL_ID)
         log_channel = bot.get_channel(LOG_CHANNEL_ID)
+        punishment_channel = bot.get_channel(PUNISHMENT_LOG_CHANNEL_ID)  # 🆕 新增
         
         print(f'🔍 频道检查:')
         print(f'  - 审核频道: {"✅" if audit_channel else "❌"} {audit_channel}')
         print(f'  - 欢迎频道: {"✅" if welcome_channel else "❌"} {welcome_channel}')
-        print(f'  - 日志频道: {"✅" if log_channel else "❌"} {log_channel}')
+        print(f'  - 一般日志: {"✅" if log_channel else "❌"} {log_channel}')
+        print(f'  - 处罚日志: {"✅" if punishment_channel else "❌"} {punishment_channel}')  # 🆕 新增
         
         # 检查bot权限
         bot_member = guild.get_member(bot.user.id)
@@ -1016,8 +1035,8 @@ async def reject_member(interaction: discord.Interaction, member: discord.Member
             except discord.Forbidden:
                 pass
 
-        # 记录日志
-        await send_log("❌ 用户审核被拒绝", f"{interaction.user} 拒绝了 {member}\n原因：{reason}\n操作：{action_text}", 0xff0000)
+        # 🆕 修改：使用处罚日志频道
+        await send_punishment_log("❌ 用户审核被拒绝", f"{interaction.user} 拒绝了 {member}\n原因：{reason}\n操作：{action_text}", 0xff0000)
 
     except discord.Forbidden:
         await interaction.response.send_message("❌ 我没有足够权限执行此操作！", ephemeral=True)
@@ -1144,7 +1163,8 @@ async def kick_slash(interaction: discord.Interaction, member: discord.Member, r
         embed.add_field(name="原因", value=reason, inline=False)
 
         await interaction.response.send_message(embed=embed)
-        await send_log("👢 踢出成员", f"{interaction.user} 踢出了 {member}\n原因：{reason}", 0xff9900)
+        # 🆕 修改：使用处罚日志频道
+        await send_punishment_log("👢 踢出成员", f"{interaction.user} 踢出了 {member}\n原因：{reason}", 0xff9900)
     except discord.Forbidden:
         await interaction.response.send_message("❌ 我没有权限踢出这个用户！", ephemeral=True)
 
@@ -1166,7 +1186,8 @@ async def ban_slash(interaction: discord.Interaction, member: discord.Member, re
         embed.add_field(name="原因", value=reason, inline=False)
 
         await interaction.response.send_message(embed=embed)
-        await send_log("🔨 封禁成员", f"{interaction.user} 封禁了 {member}\n原因：{reason}", 0xff0000)
+        # 🆕 修改：使用处罚日志频道
+        await send_punishment_log("🔨 封禁成员", f"{interaction.user} 封禁了 {member}\n原因：{reason}", 0xff0000)
     except discord.Forbidden:
         await interaction.response.send_message("❌ 我没有权限封禁这个用户！", ephemeral=True)
 
@@ -1197,7 +1218,8 @@ async def timeout_slash(interaction: discord.Interaction, member: discord.Member
         embed.add_field(name="原因", value=reason, inline=False)
 
         await interaction.response.send_message(embed=embed)
-        await send_log("🔇 禁言成员", f"{interaction.user} 禁言了 {member} {duration}分钟\n原因：{reason}", 0xffaa00)
+        # 🆕 修改：使用处罚日志频道
+        await send_punishment_log("🔇 禁言成员", f"{interaction.user} 禁言了 {member} {duration}分钟\n原因：{reason}", 0xffaa00)
     except discord.Forbidden:
         await interaction.response.send_message("❌ 我没有权限禁言这个用户！", ephemeral=True)
 
@@ -1215,6 +1237,7 @@ async def untimeout_slash(interaction: discord.Interaction, member: discord.Memb
         embed.add_field(name="执行者", value=f"{interaction.user}", inline=True)
 
         await interaction.response.send_message(embed=embed)
+        # 🆕 修改：这个算是撤销处罚，可以发到一般日志
         await send_log("🔊 解除禁言", f"{interaction.user} 解除了 {member} 的禁言", 0x00ff00)
     except discord.Forbidden:
         await interaction.response.send_message("❌ 我没有权限解除这个用户的禁言！", ephemeral=True)
@@ -1674,14 +1697,16 @@ async def debug_command(interaction: discord.Interaction):
     
     embed.add_field(name="角色检查", value=role_status, inline=False)
     
-    # 检查频道权限
+    # 🆕 修改：检查新的处罚频道
     audit_channel = bot.get_channel(AUDIT_CHANNEL_ID)
     welcome_channel = bot.get_channel(WELCOME_CHANNEL_ID)
     log_channel = bot.get_channel(LOG_CHANNEL_ID)
-    
+    punishment_channel = bot.get_channel(PUNISHMENT_LOG_CHANNEL_ID)
+
     channel_status = f"审核频道: {'✅' if audit_channel else '❌'}\n"
     channel_status += f"欢迎频道: {'✅' if welcome_channel else '❌'}\n"
-    channel_status += f"日志频道: {'✅' if log_channel else '❌'}"
+    channel_status += f"一般日志: {'✅' if log_channel else '❌'}\n"
+    channel_status += f"处罚日志: {'✅' if punishment_channel else '❌'}"
     
     embed.add_field(name="频道检查", value=channel_status, inline=False)
     
