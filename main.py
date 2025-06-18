@@ -840,13 +840,21 @@ async def on_message(message):
     
     # 只处理私信
     if isinstance(message.channel, discord.DMChannel):
-        # 检查用户是否在待审核状态
+        # 检查用户是否在需要审核状态（待审核或被拒绝后重新提交）
         guild = bot.get_guild(GUILD_ID)
         if guild:
             member = guild.get_member(message.author.id)
             if member:
                 pending_role = discord.utils.get(guild.roles, name=PENDING_ROLE_NAME)
-                if pending_role and pending_role in member.roles:
+                rejected_role = discord.utils.get(guild.roles, name=REJECTED_ROLE_NAME)
+                
+                # 检查用户是否有待审核角色或被拒绝角色
+                has_audit_role = (
+                    (pending_role and pending_role in member.roles) or
+                    (rejected_role and rejected_role in member.roles)
+                )
+                
+                if has_audit_role:
                     # 检查消息是否包含图片
                     if message.attachments:
                         for attachment in message.attachments:
