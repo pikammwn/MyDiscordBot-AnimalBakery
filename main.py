@@ -176,9 +176,6 @@ class PinActionView(discord.ui.View):
             
             await interaction.response.edit_message(embed=embed, view=None)
             
-            # 记录日志
-            await send_log("📌 消息标注", f"{interaction.user} 在帖子 {self.thread.name} 中标注了一条消息", 0x00ff00)
-            
         except discord.Forbidden:
             await interaction.response.edit_message(content="❌ 权限不足！无法标注消息。", view=None)
         except discord.HTTPException as e:
@@ -206,9 +203,6 @@ class PinActionView(discord.ui.View):
             embed.add_field(name="👤 操作者", value=f"{interaction.user.mention}", inline=False)
             
             await interaction.response.edit_message(embed=embed, view=None)
-            
-            # 记录日志
-            await send_log("📌 取消标注", f"{interaction.user} 在帖子 {self.thread.name} 中取消了一条消息的标注", 0xffa500)
             
         except discord.Forbidden:
             await interaction.response.edit_message(content="❌ 权限不足！无法取消标注。", view=None)
@@ -1574,14 +1568,14 @@ async def setup_roles_slash(interaction: discord.Interaction):
     for emoji in REACTION_ROLES.keys():
         await message.add_reaction(emoji)
 
-# 🆕 修改：反应角色事件监听（仅在审核频道生效）
+# 🆕 修改：反应角色事件监听（仅在角色变化频道生效）
 @bot.event
 async def on_raw_reaction_add(payload):
     if payload.user_id == bot.user.id:
         return
 
-    # 🆕 新增：检查是否在指定的审核频道中
-    if payload.channel_id != AUDIT_CHANNEL_ID:
+    # 🆕 新增：检查是否在指定的角色变化频道中
+    if payload.channel_id != ROLE_CHANGE_CHANNEL_ID:
         return
 
     guild = bot.get_guild(payload.guild_id)
@@ -1604,8 +1598,8 @@ async def on_raw_reaction_remove(payload):
     if payload.user_id == bot.user.id:
         return
 
-    # 🆕 新增：检查是否在指定的审核频道中
-    if payload.channel_id != AUDIT_CHANNEL_ID:
+    # 🆕 新增：检查是否在指定的角色变化频道中
+    if payload.channel_id != ROLE_CHANGE_CHANNEL_ID:
         return
 
     guild = bot.get_guild(payload.guild_id)
@@ -2260,7 +2254,7 @@ async def help_slash(interaction: discord.Interaction):
     )
 
     embed.add_field(name="部署平台", value="Vultr - 24小时稳定运行 ✨", inline=False)
-    embed.add_field(name="🆕 新功能", value="私信审核系统 + 消息标注功能 + 审核频道专属反应角色", inline=False)
+    embed.add_field(name="🆕 新功能", value="私信审核系统 + 消息标注功能 + 角色变化频道专属反应角色", inline=False)
     embed.set_footer(text="使用斜杠命令 (/) 来调用这些功能！现在运行在Vultr上，告别断线烦恼！")
 
     await interaction.response.send_message(embed=embed)
@@ -2286,7 +2280,7 @@ def home():
             <p>🎉 告别断线烦恼！</p>
             <p>📱 新增私信审核系统！</p>
             <p>📌 新增消息标注功能！</p>
-            <p>🎭 审核频道专属反应角色！</p>
+            <p>🎭 角色变化频道专属反应角色！</p>
         </body>
     </html>
     """
@@ -2299,7 +2293,7 @@ def health():
         "guilds": len(bot.guilds) if bot.is_ready() else 0,
         "platform": "Vultr",
         "audit_system": "DM_Based",
-        "new_features": ["pin_message", "restricted_reaction_roles"]
+        "new_features": ["pin_message", "role_channel_restricted_reactions"]
     })
 
 def run_flask():
@@ -2328,5 +2322,5 @@ if __name__ == "__main__":
     print(f"🚀 在Vultr上启动 {BOT_NAME}...")
     print(f"📱 新审核系统: 私信提交模式")
     print(f"📌 新功能: 消息标注系统")
-    print(f"🎭 新功能: 审核频道专属反应角色")
+    print(f"🎭 新功能: 角色变化频道专属反应角色")
     asyncio.run(main())
