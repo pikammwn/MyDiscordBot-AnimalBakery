@@ -29,10 +29,6 @@ WELCOME_DESC = "{user}，喜欢您来！请吃好喝好^^"
 BOT_COLOR = 0xffb3cd                     #浅粉色
 BOT_PREFIX = "!"                         # 🔧 传统命令前缀
 
-# ==================== 🆕 新功能：消息标注系统 🆕 ====================
-# 存储标注的消息 {channel_id: {message_id: {'marker': user_id, 'note': str, 'timestamp': datetime}}}
-marked_messages = {}
-
 # ==================== 机器人设置 ====================
 class MyBot(commands.Bot):
     def __init__(self):
@@ -63,42 +59,6 @@ bot = MyBot()
 # ==================== 📷 用户图片存储系统 ====================
 # 用户图片存储字典（临时存储）
 user_images = {}
-
-# ==================== 🆕 消息标注功能函数 🆕 ====================
-def parse_message_link(link: str):
-    """解析Discord消息链接，返回(guild_id, channel_id, message_id)"""
-    pattern = r'https://discord\.com/channels/(\d+)/(\d+)/(\d+)'
-    match = re.match(pattern, link)
-    if match:
-        return int(match.group(1)), int(match.group(2)), int(match.group(3))
-    return None, None, None
-
-async def get_thread_author(channel):
-    """获取帖子的发帖人（频道或线程的第一条消息作者）"""
-    try:
-        # 如果是线程，直接返回线程的创建者
-        if isinstance(channel, discord.Thread):
-            return channel.owner
-        
-        # 如果是普通频道，获取第一条消息的作者
-        async for message in channel.history(limit=1, oldest_first=True):
-            return message.author
-        return None
-    except:
-        return None
-
-def can_mark_message(user, channel, guild):
-    """检查用户是否可以标注该频道的消息"""
-    # 管理员总是可以标注
-    if user.guild_permissions.administrator:
-        return True, "管理员权限"
-    
-    # 如果是线程，检查是否为线程创建者
-    if isinstance(channel, discord.Thread):
-        if channel.owner and channel.owner.id == user.id:
-            return True, "线程创建者"
-    
-    return False, "无权限"
 
 # ==================== 📝 日志功能 ====================
 async def send_log(title: str, description: str, color: int = 0x36393f):
@@ -170,6 +130,157 @@ async def send_audit_message(title: str, description: str, color: int = 0x36393f
             timestamp=datetime.now()
         )
         await audit_channel.send(embed=embed)
+
+# ==================== 📌 消息标注功能 ====================
+def parse_message_link(link: str):
+    """解析Discord消息链接"""
+    pattern = r"https://discord\.com/channels/(\d+)/(\d+)/(\d+)"
+    match = re.match(pattern, link)
+    if match:
+        guild_id = int(match.group(1))
+        channel_id = int(match.group(2))
+        message_id = int(match.group(3))
+        return guild_id, channel_id, message_id
+    return None, None, None
+
+async def is_thread_owner_or_admin(interaction: discord.Interaction, channel: discord.Thread) -> bool:
+    """检查用户是否是帖子所有者或管理员"""
+    return (
+        interaction.user.guild_permissions.administrator or
+        MODERATOR_ROLE_NAME in [role.name for role in interaction.user.roles] or
+        channel.owner_id == interaction.user.id
+    )
+
+class PinActionView(discord.ui.View):
+    def __init__(self, message_link: str, target_message: discord.Message, thread: discord.Thread):
+        super().__init__(timeout=60)
+        self.message_link = message_link
+        self.target_message = target_message
+        self.thread = thread
+
+    @discord.ui.button(label="📌 标注消息", style=discord.ButtonStyle.green, emoji="📌")
+    async def pin_message(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            # 标注消息到帖子
+            await self.target_message.pin()
+            
+            embed = discord.Embed(
+                title="✅ 消息已标注",
+                description=f"消息已成功标注到帖子的「已标注消息」中！",
+                color=0x00ff00,
+                timestamp=datetime.now()
+            )
+            embed.add_field(name="📌 标注的消息", value=f"[点击查看]({self.message_link})", inline=False)
+            embed.add_field(name="📍 帖子", value=f"{self.thread.mention}", inline=False)
+            embed.add_field(name="👤 操作者", value=f"{interaction.user.mention}", inline=False)
+            
+            await interaction.response.edit_message(embed=embed, view=None)
+            
+            # 记录日志
+            await send_log("📌 消息标注", f"{interaction.user} 在帖子 {self.thread.name} 中标注了一条消息", 0x00ff00)
+            
+        except discord.Forbidden:
+            await interaction.response.edit_message(content="❌ 权限不足！无法标注消息。", view=None)
+        except discord.HTTPException as e:
+            if e.code == 50019:  # 达到标注限制
+                await interaction.response.edit_message(content="❌ 该帖子的标注消息已达到上限（50条）！", view=None)
+            else:
+                await interaction.response.edit_message(content=f"❌ 标注失败：{e}", view=None)
+        except Exception as e:
+            await interaction.response.edit_message(content=f"❌ 发生未知错误：{e}", view=None)
+
+    @discord.ui.button(label="📌 取消标注", style=discord.ButtonStyle.red, emoji="📌")
+    async def unpin_message(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            # 取消标注消息
+            await self.target_message.unpin()
+            
+            embed = discord.Embed(
+                title="✅ 标注已取消",
+                description=f"消息的标注已成功取消！",
+                color=0x00ff00,
+                timestamp=datetime.now()
+            )
+            embed.add_field(name="📌 取消标注的消息", value=f"[点击查看]({self.message_link})", inline=False)
+            embed.add_field(name="📍 帖子", value=f"{self.thread.mention}", inline=False)
+            embed.add_field(name="👤 操作者", value=f"{interaction.user.mention}", inline=False)
+            
+            await interaction.response.edit_message(embed=embed, view=None)
+            
+            # 记录日志
+            await send_log("📌 取消标注", f"{interaction.user} 在帖子 {self.thread.name} 中取消了一条消息的标注", 0xffa500)
+            
+        except discord.Forbidden:
+            await interaction.response.edit_message(content="❌ 权限不足！无法取消标注。", view=None)
+        except discord.NotFound:
+            await interaction.response.edit_message(content="❌ 该消息未被标注或已被删除！", view=None)
+        except Exception as e:
+            await interaction.response.edit_message(content=f"❌ 发生未知错误：{e}", view=None)
+
+@bot.tree.command(name="pin_message", description="标注或取消标注帖子中的消息")
+@app_commands.describe(message_link="要标注的消息链接")
+async def pin_message_slash(interaction: discord.Interaction, message_link: str):
+    # 解析消息链接
+    guild_id, channel_id, message_id = parse_message_link(message_link)
+    
+    if not all([guild_id, channel_id, message_id]):
+        await interaction.response.send_message("❌ 无效的消息链接！请提供正确的Discord消息链接。", ephemeral=True)
+        return
+    
+    # 检查是否是当前服务器
+    if guild_id != interaction.guild.id:
+        await interaction.response.send_message("❌ 消息链接不属于当前服务器！", ephemeral=True)
+        return
+    
+    try:
+        # 获取目标频道和消息
+        target_channel = bot.get_channel(channel_id)
+        if not target_channel:
+            await interaction.response.send_message("❌ 找不到目标频道！", ephemeral=True)
+            return
+        
+        # 检查是否是forum帖子（Thread）
+        if not isinstance(target_channel, discord.Thread):
+            await interaction.response.send_message("❌ 只能标注forum帖子中的消息！", ephemeral=True)
+            return
+        
+        # 检查权限：是否是帖子所有者或管理员
+        if not await is_thread_owner_or_admin(interaction, target_channel):
+            await interaction.response.send_message("❌ 只有帖子发布者和管理员可以标注消息！", ephemeral=True)
+            return
+        
+        # 获取目标消息
+        target_message = await target_channel.fetch_message(message_id)
+        if not target_message:
+            await interaction.response.send_message("❌ 找不到目标消息！", ephemeral=True)
+            return
+        
+        # 创建标注选择界面
+        embed = discord.Embed(
+            title="📌 消息标注操作",
+            description="请选择要执行的操作：",
+            color=BOT_COLOR,
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="📍 目标帖子", value=f"{target_channel.mention}", inline=False)
+        embed.add_field(name="📝 目标消息", value=f"[点击查看消息]({message_link})", inline=False)
+        embed.add_field(name="✏️ 消息内容预览", value=target_message.content[:200] + ("..." if len(target_message.content) > 200 else ""), inline=False)
+        embed.add_field(name="👤 消息作者", value=f"{target_message.author.mention}", inline=True)
+        embed.add_field(name="📅 发送时间", value=f"<t:{int(target_message.created_at.timestamp())}:R>", inline=True)
+        embed.add_field(name="📌 当前状态", value="已标注" if target_message.pinned else "未标注", inline=True)
+        
+        embed.set_footer(text="⏰ 此操作将在60秒后过期")
+        
+        view = PinActionView(message_link, target_message, target_channel)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        
+    except discord.NotFound:
+        await interaction.response.send_message("❌ 找不到指定的消息！", ephemeral=True)
+    except discord.Forbidden:
+        await interaction.response.send_message("❌ 没有权限访问该消息！", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ 发生错误：{e}", ephemeral=True)
+        print(f"Pin message error: {e}")
 
 # ==================== 📝 拒绝理由填写模态框 ====================
 class RejectReasonModal(discord.ui.Modal, title='📝 填写拒绝理由'):
@@ -955,241 +1066,6 @@ def is_moderator_or_admin(interaction: discord.Interaction) -> bool:
         MODERATOR_ROLE_NAME in user_roles
     )
 
-# ==================== 🆕 消息标注斜杠命令 🆕 ====================
-
-@bot.tree.command(name="mark_message", description="标注消息")
-@app_commands.describe(
-    message_link="Discord消息链接",
-    note="标注备注（可选）"
-)
-async def mark_message_slash(interaction: discord.Interaction, message_link: str, note: str = ""):
-    # 解析消息链接
-    guild_id, channel_id, message_id = parse_message_link(message_link)
-    
-    if not all([guild_id, channel_id, message_id]):
-        await interaction.response.send_message("❌ 无效的消息链接格式！", ephemeral=True)
-        return
-
-    if guild_id != interaction.guild.id:
-        await interaction.response.send_message("❌ 消息链接不属于当前服务器！", ephemeral=True)
-        return
-
-    # 获取频道和消息
-    try:
-        channel = bot.get_channel(channel_id)
-        if not channel:
-            await interaction.response.send_message("❌ 找不到指定频道！", ephemeral=True)
-            return
-
-        message = await channel.fetch_message(message_id)
-        if not message:
-            await interaction.response.send_message("❌ 找不到指定消息！", ephemeral=True)
-            return
-
-    except discord.NotFound:
-        await interaction.response.send_message("❌ 消息不存在！", ephemeral=True)
-        return
-    except discord.Forbidden:
-        await interaction.response.send_message("❌ 没有权限访问该消息！", ephemeral=True)
-        return
-
-    # 检查权限
-    can_mark, reason = can_mark_message(interaction.user, channel, interaction.guild)
-    if not can_mark:
-        await interaction.response.send_message(f"❌ {reason}！你只能标注自己创建的帖子中的消息。", ephemeral=True)
-        return
-
-    # 标注消息
-    if channel_id not in marked_messages:
-        marked_messages[channel_id] = {}
-
-    marked_messages[channel_id][message_id] = {
-        'marker': interaction.user.id,
-        'note': note,
-        'timestamp': datetime.now(),
-        'message_content': message.content[:100] + '...' if len(message.content) > 100 else message.content,
-        'message_author': str(message.author)
-    }
-
-    # 创建回复
-    embed = discord.Embed(
-        title="📌 消息已标注",
-        description=f"成功标注了消息：[跳转到消息]({message_link})",
-        color=0x00ff00,
-        timestamp=datetime.now()
-    )
-    embed.add_field(name="📝 消息内容", value=message.content[:200] + '...' if len(message.content) > 200 else message.content, inline=False)
-    embed.add_field(name="👤 消息作者", value=str(message.author), inline=True)
-    embed.add_field(name="🏷️ 标注者", value=str(interaction.user), inline=True)
-    
-    if note:
-        embed.add_field(name="📋 备注", value=note, inline=False)
-
-    embed.set_footer(text=f"权限: {reason}")
-
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    # 记录日志
-    log_text = f"{interaction.user} 标注了消息 (频道: {channel.name}, 作者: {message.author})"
-    if note:
-        log_text += f"\n备注: {note}"
-    await send_log("📌 消息标注", log_text, 0x00ff00)
-
-@bot.tree.command(name="unmark_message", description="取消标注消息")
-@app_commands.describe(message_link="Discord消息链接")
-async def unmark_message_slash(interaction: discord.Interaction, message_link: str):
-    # 解析消息链接
-    guild_id, channel_id, message_id = parse_message_link(message_link)
-    
-    if not all([guild_id, channel_id, message_id]):
-        await interaction.response.send_message("❌ 无效的消息链接格式！", ephemeral=True)
-        return
-
-    if guild_id != interaction.guild.id:
-        await interaction.response.send_message("❌ 消息链接不属于当前服务器！", ephemeral=True)
-        return
-
-    # 检查消息是否已标注
-    if channel_id not in marked_messages or message_id not in marked_messages[channel_id]:
-        await interaction.response.send_message("❌ 该消息未被标注！", ephemeral=True)
-        return
-
-    # 获取频道
-    channel = bot.get_channel(channel_id)
-    if not channel:
-        await interaction.response.send_message("❌ 找不到指定频道！", ephemeral=True)
-        return
-
-    # 检查权限
-    can_mark, reason = can_mark_message(interaction.user, channel, interaction.guild)
-    marked_info = marked_messages[channel_id][message_id]
-    
-    # 只有标注者或管理员可以取消标注
-    if not (can_mark or marked_info['marker'] == interaction.user.id):
-        await interaction.response.send_message("❌ 你只能取消自己的标注或自己帖子中的标注！", ephemeral=True)
-        return
-
-    # 获取标注信息用于显示
-    marker_user = bot.get_user(marked_info['marker'])
-    note = marked_info.get('note', '')
-
-    # 取消标注
-    del marked_messages[channel_id][message_id]
-    
-    # 如果频道没有其他标注了，删除频道记录
-    if not marked_messages[channel_id]:
-        del marked_messages[channel_id]
-
-    # 创建回复
-    embed = discord.Embed(
-        title="🗑️ 标注已取消",
-        description=f"成功取消了消息标注：[跳转到消息]({message_link})",
-        color=0xff9900,
-        timestamp=datetime.now()
-    )
-    embed.add_field(name="📝 消息内容", value=marked_info['message_content'], inline=False)
-    embed.add_field(name="👤 消息作者", value=marked_info['message_author'], inline=True)
-    embed.add_field(name="🏷️ 原标注者", value=str(marker_user) if marker_user else "未知用户", inline=True)
-    embed.add_field(name="🗑️ 取消者", value=str(interaction.user), inline=True)
-    
-    if note:
-        embed.add_field(name="📋 原备注", value=note, inline=False)
-
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    # 记录日志
-    log_text = f"{interaction.user} 取消了消息标注 (频道: {channel.name}, 原标注者: {marker_user})"
-    if note:
-        log_text += f"\n原备注: {note}"
-    await send_log("🗑️ 取消标注", log_text, 0xff9900)
-
-@bot.tree.command(name="list_marked", description="查看已标注的消息")
-@app_commands.describe(channel="指定频道（可选）")
-async def list_marked_slash(interaction: discord.Interaction, channel: discord.TextChannel = None):
-    if not marked_messages:
-        await interaction.response.send_message("❌ 当前没有已标注的消息！", ephemeral=True)
-        return
-
-    # 如果指定了频道，只显示该频道的标注
-    if channel:
-        channel_id = channel.id
-        if channel_id not in marked_messages or not marked_messages[channel_id]:
-            await interaction.response.send_message(f"❌ {channel.mention} 中没有已标注的消息！", ephemeral=True)
-            return
-        
-        # 检查权限
-        can_mark, reason = can_mark_message(interaction.user, channel, interaction.guild)
-        if not can_mark:
-            await interaction.response.send_message(f"❌ {reason}！你只能查看自己帖子中的标注。", ephemeral=True)
-            return
-
-        channels_to_show = {channel_id: marked_messages[channel_id]}
-        title = f"📌 {channel.name} 的已标注消息"
-    else:
-        # 显示所有有权限查看的频道
-        channels_to_show = {}
-        for channel_id, messages in marked_messages.items():
-            channel_obj = bot.get_channel(channel_id)
-            if channel_obj:
-                can_mark, _ = can_mark_message(interaction.user, channel_obj, interaction.guild)
-                if can_mark:
-                    channels_to_show[channel_id] = messages
-        
-        if not channels_to_show:
-            await interaction.response.send_message("❌ 没有你有权限查看的已标注消息！", ephemeral=True)
-            return
-
-        title = "📌 所有已标注的消息"
-
-    # 创建embed
-    embed = discord.Embed(
-        title=title,
-        color=0x00ff00,
-        timestamp=datetime.now()
-    )
-
-    total_count = 0
-    for channel_id, messages in channels_to_show.items():
-        channel_obj = bot.get_channel(channel_id)
-        if not channel_obj:
-            continue
-
-        if len(messages) == 0:
-            continue
-
-        total_count += len(messages)
-        
-        # 每个频道最多显示5个标注
-        messages_shown = 0
-        field_value = ""
-        
-        for message_id, mark_info in list(messages.items())[:5]:
-            messages_shown += 1
-            marker_user = bot.get_user(mark_info['marker'])
-            marker_name = str(marker_user) if marker_user else "未知用户"
-            
-            # 创建消息链接
-            message_link = f"https://discord.com/channels/{interaction.guild.id}/{channel_id}/{message_id}"
-            
-            field_value += f"[消息 {messages_shown}]({message_link}) - {marker_name}\n"
-            if mark_info.get('note'):
-                field_value += f"  📋 {mark_info['note'][:50]}{'...' if len(mark_info['note']) > 50 else ''}\n"
-        
-        if len(messages) > 5:
-            field_value += f"... 及其他 {len(messages) - 5} 个标注\n"
-
-        embed.add_field(
-            name=f"#{channel_obj.name} ({len(messages)} 个标注)",
-            value=field_value,
-            inline=False
-        )
-
-    embed.set_footer(text=f"总计 {total_count} 个标注")
-
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-# ==================== 斜杠命令 ====================
-
 @bot.tree.command(name="approve", description="批准待审核用户")
 @app_commands.describe(
     member="要批准的用户",
@@ -1661,7 +1537,7 @@ async def serverinfo_slash(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed)
 
-# ==================== 🎭 反应角色功能 ====================
+# ==================== 🎭 反应角色功能（仅在审核频道） ====================
 
 # 🔧 在这里修改你的反应角色配置
 REACTION_ROLES = {
@@ -1698,13 +1574,13 @@ async def setup_roles_slash(interaction: discord.Interaction):
     for emoji in REACTION_ROLES.keys():
         await message.add_reaction(emoji)
 
-# 🆕 修改：反应角色事件监听 - 仅在审核频道生效
+# 🆕 修改：反应角色事件监听（仅在审核频道生效）
 @bot.event
 async def on_raw_reaction_add(payload):
     if payload.user_id == bot.user.id:
         return
 
-    # 🆕 新功能：限制反应角色功能仅在审核频道生效
+    # 🆕 新增：检查是否在指定的审核频道中
     if payload.channel_id != AUDIT_CHANNEL_ID:
         return
 
@@ -1728,7 +1604,7 @@ async def on_raw_reaction_remove(payload):
     if payload.user_id == bot.user.id:
         return
 
-    # 🆕 新功能：限制反应角色功能仅在审核频道生效
+    # 🆕 新增：检查是否在指定的审核频道中
     if payload.channel_id != AUDIT_CHANNEL_ID:
         return
 
@@ -2016,10 +1892,6 @@ async def debug_command(interaction: discord.Interaction):
             bot_role_info += f"❌ Bot角色低于待审核角色！需要提升Bot角色位置"
     
     embed.add_field(name="角色层级检查", value=bot_role_info, inline=False)
-    
-    # 🆕 新增：消息标注系统状态
-    marked_count = sum(len(messages) for messages in marked_messages.values())
-    embed.add_field(name="📌 消息标注系统", value=f"已标注消息: {marked_count} 条", inline=False)
     
     # 添加解决建议
     suggestions = ""
@@ -2371,7 +2243,7 @@ async def help_slash(interaction: discord.Interaction):
 
     embed.add_field(
         name="💬 消息管理",
-        value="`/clear` - 清理消息\n`/announce` - 发送公告",
+        value="`/clear` - 清理消息\n`/announce` - 发送公告\n`/pin_message` - 🆕 标注/取消标注消息",
         inline=False
     )
 
@@ -2387,15 +2259,8 @@ async def help_slash(interaction: discord.Interaction):
         inline=False
     )
 
-    # 🆕 新增：消息标注功能帮助
-    embed.add_field(
-        name="📌 消息标注（新功能）",
-        value="`/mark_message` - 标注消息\n`/unmark_message` - 取消标注\n`/list_marked` - 查看已标注消息",
-        inline=False
-    )
-
     embed.add_field(name="部署平台", value="Vultr - 24小时稳定运行 ✨", inline=False)
-    embed.add_field(name="🆕 新功能", value="1. 私信审核系统\n2. 消息标注系统\n3. 限制反应角色仅审核频道", inline=False)
+    embed.add_field(name="🆕 新功能", value="私信审核系统 + 消息标注功能 + 审核频道专属反应角色", inline=False)
     embed.set_footer(text="使用斜杠命令 (/) 来调用这些功能！现在运行在Vultr上，告别断线烦恼！")
 
     await interaction.response.send_message(embed=embed)
@@ -2421,7 +2286,7 @@ def home():
             <p>🎉 告别断线烦恼！</p>
             <p>📱 新增私信审核系统！</p>
             <p>📌 新增消息标注功能！</p>
-            <p>🎭 反应角色限制在审核频道！</p>
+            <p>🎭 审核频道专属反应角色！</p>
         </body>
     </html>
     """
@@ -2434,8 +2299,7 @@ def health():
         "guilds": len(bot.guilds) if bot.is_ready() else 0,
         "platform": "Vultr",
         "audit_system": "DM_Based",
-        "message_marks": sum(len(messages) for messages in marked_messages.values()),
-        "reaction_roles_channel": AUDIT_CHANNEL_ID
+        "new_features": ["pin_message", "restricted_reaction_roles"]
     })
 
 def run_flask():
@@ -2463,6 +2327,6 @@ if __name__ == "__main__":
     
     print(f"🚀 在Vultr上启动 {BOT_NAME}...")
     print(f"📱 新审核系统: 私信提交模式")
-    print(f"📌 新增功能: 消息标注系统") 
-    print(f"🎭 反应角色限制: 仅在审核频道 {AUDIT_CHANNEL_ID}")
+    print(f"📌 新功能: 消息标注系统")
+    print(f"🎭 新功能: 审核频道专属反应角色")
     asyncio.run(main())
