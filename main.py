@@ -211,7 +211,7 @@ class PinActionView(discord.ui.View):
         except Exception as e:
             await interaction.response.edit_message(content=f"❌ 发生未知错误：{e}", view=None)
 
-@bot.tree.command(name="pin_message", description="标注或取消标注帖子中的消息")
+@bot.tree.command(name="标注消息", description="标注或取消标注帖子中的消息")
 @app_commands.describe(message_link="要标注的消息链接")
 async def pin_message_slash(interaction: discord.Interaction, message_link: str):
     # 解析消息链接
@@ -912,7 +912,7 @@ async def on_ready():
         print(f'❌ 找不到指定的服务器 (ID: {GUILD_ID})')
     
     await bot.change_presence(activity=discord.Game(name="🚀 Vultr稳定运行"))
-    print(f'✅ Bot初始化完成！使用 /debug 命令检查详细配置')
+    print(f'✅ Bot初始化完成！使用 /调试 命令检查详细配置')
 
 # 新成员自动进入审核流程（修改为私信方式）
 @bot.event
@@ -1060,7 +1060,7 @@ def is_moderator_or_admin(interaction: discord.Interaction) -> bool:
         MODERATOR_ROLE_NAME in user_roles
     )
 
-@bot.tree.command(name="approve", description="批准待审核用户")
+@bot.tree.command(name="批准", description="批准待审核用户")
 @app_commands.describe(
     member="要批准的用户",
     reason="批准原因（可选）"
@@ -1115,7 +1115,7 @@ async def approve_member(interaction: discord.Interaction, member: discord.Membe
     except discord.Forbidden:
         await interaction.response.send_message("❌ 我没有权限修改用户角色！", ephemeral=True)
 
-@bot.tree.command(name="reject", description="拒绝待审核用户")
+@bot.tree.command(name="拒绝", description="拒绝待审核用户")
 @app_commands.describe(
     member="要拒绝的用户",
     reason="拒绝原因",
@@ -1187,7 +1187,7 @@ async def reject_member(interaction: discord.Interaction, member: discord.Member
     except discord.Forbidden:
         await interaction.response.send_message("❌ 我没有足够权限执行此操作！", ephemeral=True)
 
-@bot.tree.command(name="pending", description="查看待审核用户列表")
+@bot.tree.command(name="待审核", description="查看待审核用户列表")
 async def view_pending(interaction: discord.Interaction):
     if not is_moderator_or_admin(interaction):
         await interaction.response.send_message("❌ 你没有审核权限！", ephemeral=True)
@@ -1230,7 +1230,7 @@ async def view_pending(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="reaudit", description="重新审核被拒绝的用户")
+@bot.tree.command(name="重新审核", description="重新审核被拒绝的用户")
 @app_commands.describe(member="要重新审核的用户")
 async def reaudit_member(interaction: discord.Interaction, member: discord.Member):
     if not is_moderator_or_admin(interaction):
@@ -1291,7 +1291,7 @@ async def reaudit_member(interaction: discord.Interaction, member: discord.Membe
     except discord.Forbidden:
         await interaction.response.send_message("❌ 我没有权限修改用户角色！", ephemeral=True)
 
-@bot.tree.command(name="kick", description="踢出一个成员")
+@bot.tree.command(name="踢出", description="踢出一个成员")
 @app_commands.describe(
     member="要踢出的成员",
     reason="踢出原因"
@@ -1314,7 +1314,7 @@ async def kick_slash(interaction: discord.Interaction, member: discord.Member, r
     except discord.Forbidden:
         await interaction.response.send_message("❌ 我没有权限踢出这个用户！", ephemeral=True)
 
-@bot.tree.command(name="ban", description="封禁一个成员")
+@bot.tree.command(name="封禁", description="封禁一个成员")
 @app_commands.describe(
     member="要封禁的成员",
     reason="封禁原因"
@@ -1337,7 +1337,7 @@ async def ban_slash(interaction: discord.Interaction, member: discord.Member, re
     except discord.Forbidden:
         await interaction.response.send_message("❌ 我没有权限封禁这个用户！", ephemeral=True)
 
-@bot.tree.command(name="timeout", description="禁言一个成员")
+@bot.tree.command(name="禁言", description="禁言一个成员")
 @app_commands.describe(
     member="要禁言的成员",
     duration="禁言时长（分钟）",
@@ -1369,7 +1369,7 @@ async def timeout_slash(interaction: discord.Interaction, member: discord.Member
     except discord.Forbidden:
         await interaction.response.send_message("❌ 我没有权限禁言这个用户！", ephemeral=True)
 
-@bot.tree.command(name="untimeout", description="解除成员禁言")
+@bot.tree.command(name="解除禁言", description="解除成员禁言")
 @app_commands.describe(member="要解除禁言的成员")
 async def untimeout_slash(interaction: discord.Interaction, member: discord.Member):
     if not interaction.user.guild_permissions.moderate_members:
@@ -1390,7 +1390,7 @@ async def untimeout_slash(interaction: discord.Interaction, member: discord.Memb
 
 # ==================== 💬 消息管理斜杠命令 ====================
 
-@bot.tree.command(name="clear", description="清理频道消息")
+@bot.tree.command(name="清理", description="清理频道消息")
 @app_commands.describe(
     amount="要删除的消息数量（1-100）",
     user="只删除特定用户的消息（可选）"
@@ -1438,7 +1438,7 @@ async def clear_slash(interaction: discord.Interaction, amount: int, user: disco
 
 # ==================== 📢 公告功能 ====================
 
-@bot.tree.command(name="announce", description="发送服务器公告")
+@bot.tree.command(name="公告", description="发送服务器公告")
 @app_commands.describe(
     channel="发送公告的频道",
     title="公告标题",
@@ -1460,7 +1460,7 @@ async def announce_slash(interaction: discord.Interaction, channel: discord.Text
 
 # ==================== 📊 投票功能 ====================
 
-@bot.tree.command(name="poll", description="创建投票")
+@bot.tree.command(name="投票", description="创建投票")
 @app_commands.describe(
     question="投票问题",
     option1="选项1",
@@ -1494,7 +1494,7 @@ async def poll_slash(interaction: discord.Interaction, question: str, option1: s
 
 # ==================== ℹ️ 信息查看 ====================
 
-@bot.tree.command(name="userinfo", description="查看用户信息")
+@bot.tree.command(name="用户信息", description="查看用户信息")
 @app_commands.describe(user="要查看的用户（可选，默认自己）")
 async def userinfo_slash(interaction: discord.Interaction, user: discord.Member = None):
     if user is None:
@@ -1512,7 +1512,7 @@ async def userinfo_slash(interaction: discord.Interaction, user: discord.Member 
 
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="serverinfo", description="查看服务器信息")
+@bot.tree.command(name="服务器信息", description="查看服务器信息")
 async def serverinfo_slash(interaction: discord.Interaction):
     guild = interaction.guild
     embed = discord.Embed(title=f"🏠 {guild.name}", color=BOT_COLOR, timestamp=datetime.now())
@@ -1543,7 +1543,7 @@ REACTION_ROLES = {
     '🍴': '大吃一口'
 }
 
-@bot.tree.command(name="setup_roles", description="设置反应角色消息")
+@bot.tree.command(name="设置角色", description="设置反应角色消息")
 async def setup_roles_slash(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.manage_roles:
         await interaction.response.send_message("❌ 你没有管理角色的权限！", ephemeral=True)
@@ -1693,7 +1693,7 @@ class PersistentTopButtonView(discord.ui.View):
         except Exception as e:
             await interaction.response.send_message("❌ 获取第一条消息时出错了！", ephemeral=True)
 
-@bot.tree.command(name="top", description="一键回到频道第一条消息")
+@bot.tree.command(name="回首楼", description="一键回到频道第一条消息")
 async def top_slash(interaction: discord.Interaction):
     try:
         # 获取频道的第一条消息
@@ -1763,7 +1763,7 @@ async def top_slash(interaction: discord.Interaction):
     except Exception as e:
         await interaction.response.send_message("❌ 获取第一条消息时出错了！", ephemeral=True)
 
-@bot.tree.command(name="totop", description="快速回到频道第一条消息")
+@bot.tree.command(name="快速回首楼", description="快速回到频道第一条消息")
 async def totop_slash(interaction: discord.Interaction):
     try:
         # 获取频道的第一条消息
@@ -1801,7 +1801,7 @@ async def totop_slash(interaction: discord.Interaction):
     except Exception as e:
         await interaction.response.send_message("❌ 获取第一条消息时出错了！", ephemeral=True)
 
-@bot.tree.command(name="topbutton", description="发送一个永久的回首楼按钮")
+@bot.tree.command(name="回首楼按钮", description="发送一个永久的回首楼按钮")
 async def topbutton_slash(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.manage_messages:
         await interaction.response.send_message("❌ 你没有管理消息的权限！", ephemeral=True)
@@ -1826,7 +1826,7 @@ async def topbutton_slash(interaction: discord.Interaction):
 
 # ==================== 🆘 帮助命令 ====================
 
-@bot.tree.command(name="debug", description="检查bot权限和角色配置")
+@bot.tree.command(name="调试", description="检查bot权限和角色配置")
 async def debug_command(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ 只有管理员可以使用此命令！", ephemeral=True)
@@ -1905,7 +1905,7 @@ async def debug_command(interaction: discord.Interaction):
     
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="testjoin", description="模拟新成员加入（测试用）")
+@bot.tree.command(name="测试加入", description="模拟新成员加入（测试用）")
 async def test_join_command(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ 只有管理员可以使用此命令！", ephemeral=True)
@@ -1922,7 +1922,7 @@ async def test_join_command(interaction: discord.Interaction):
 
 # ==================== 📢 批量审核提醒功能 ====================
 
-@bot.tree.command(name="remind_audit", description="批量提醒待审核和被拒绝用户进行审核（仅管理员）")
+@bot.tree.command(name="批量提醒", description="批量提醒待审核和被拒绝用户进行审核（仅管理员）")
 async def remind_audit_slash(interaction: discord.Interaction):
     # 检查是否为管理员
     if not interaction.user.guild_permissions.administrator:
@@ -2085,7 +2085,7 @@ async def remind_audit_slash(interaction: discord.Interaction):
         import traceback
         traceback.print_exc()
 
-@bot.tree.command(name="remind_user", description="提醒指定用户进行审核（仅管理员）")
+@bot.tree.command(name="提醒用户", description="提醒指定用户进行审核（仅管理员）")
 @app_commands.describe(member="要提醒的用户")
 async def remind_user_slash(interaction: discord.Interaction, member: discord.Member):
     # 检查是否为管理员
@@ -2210,7 +2210,7 @@ async def remind_user_slash(interaction: discord.Interaction, member: discord.Me
         import traceback
         traceback.print_exc()
 
-@bot.tree.command(name="help", description="查看所有可用命令")
+@bot.tree.command(name="帮助", description="查看所有可用命令")
 async def help_slash(interaction: discord.Interaction):
     embed = discord.Embed(title=f"🤖 {BOT_NAME} 命令帮助", color=BOT_COLOR)
 
@@ -2218,44 +2218,44 @@ async def help_slash(interaction: discord.Interaction):
     if is_moderator_or_admin(interaction):
         embed.add_field(
             name="🔍 审核系统",
-            value="`/approve` - 批准用户\n`/reject` - 拒绝用户\n`/pending` - 待审核列表\n`/reaudit` - 重新审核",
+            value="`/批准` - 批准用户\n`/拒绝` - 拒绝用户\n`/待审核` - 待审核列表\n`/重新审核` - 重新审核",
             inline=False
         )
 
     if interaction.user.guild_permissions.administrator:
         embed.add_field(
             name="🛠️ 调试工具",
-            value="`/debug` - 检查权限配置\n`/testjoin` - 测试新成员加入\n`/remind_audit` - 批量提醒审核\n`/remind_user` - 提醒单个用户审核",
+            value="`/调试` - 检查权限配置\n`/测试加入` - 测试新成员加入\n`/批量提醒` - 批量提醒审核\n`/提醒用户` - 提醒单个用户审核",
             inline=False
         )
 
     embed.add_field(
         name="👥 用户管理",
-        value="`/kick` - 踢出用户\n`/ban` - 封禁用户\n`/timeout` - 禁言用户\n`/untimeout` - 解除禁言",
+        value="`/踢出` - 踢出用户\n`/封禁` - 封禁用户\n`/禁言` - 禁言用户\n`/解除禁言` - 解除禁言",
         inline=False
     )
 
     embed.add_field(
         name="💬 消息管理",
-        value="`/clear` - 清理消息\n`/announce` - 发送公告\n`/pin_message` - 🆕 标注/取消标注消息",
+        value="`/清理` - 清理消息\n`/公告` - 发送公告\n`/标注消息` - 🆕 标注/取消标注消息",
         inline=False
     )
 
     embed.add_field(
         name="📊 实用工具",
-        value="`/poll` - 创建投票\n`/userinfo` - 用户信息\n`/serverinfo` - 服务器信息",
+        value="`/投票` - 创建投票\n`/用户信息` - 用户信息\n`/服务器信息` - 服务器信息",
         inline=False
     )
 
     embed.add_field(
         name="🎭 其他功能",
-        value="`/setup_roles` - 设置反应角色\n`/top` - 回到频道首楼\n`/totop` - 快速回首楼\n`/topbutton` - 设置回首楼按钮",
+        value="`/设置角色` - 设置反应角色\n`/回首楼` - 回到频道首楼\n`/快速回首楼` - 快速回首楼\n`/回首楼按钮` - 设置回首楼按钮",
         inline=False
     )
 
     embed.add_field(name="部署平台", value="Vultr - 24小时稳定运行 ✨", inline=False)
-    embed.add_field(name="🆕 新功能", value="私信审核系统 + 消息标注功能 + 角色变化频道专属反应角色", inline=False)
-    embed.set_footer(text="使用斜杠命令 (/) 来调用这些功能！现在运行在Vultr上，告别断线烦恼！")
+    embed.add_field(name="🆕 新功能", value="私信审核系统 + 消息标注功能 + 角色变化频道专属反应角色 + 全中文命令", inline=False)
+    embed.set_footer(text="使用中文斜杠命令来调用这些功能！现在运行在Vultr上，告别断线烦恼！")
 
     await interaction.response.send_message(embed=embed)
 
@@ -2281,6 +2281,7 @@ def home():
             <p>📱 新增私信审核系统！</p>
             <p>📌 新增消息标注功能！</p>
             <p>🎭 角色变化频道专属反应角色！</p>
+            <p>🇨🇳 全中文斜杠命令！</p>
         </body>
     </html>
     """
@@ -2293,7 +2294,7 @@ def health():
         "guilds": len(bot.guilds) if bot.is_ready() else 0,
         "platform": "Vultr",
         "audit_system": "DM_Based",
-        "new_features": ["pin_message", "role_channel_restricted_reactions"]
+        "new_features": ["pin_message", "role_channel_restricted_reactions", "chinese_commands"]
     })
 
 def run_flask():
@@ -2323,4 +2324,5 @@ if __name__ == "__main__":
     print(f"📱 新审核系统: 私信提交模式")
     print(f"📌 新功能: 消息标注系统")
     print(f"🎭 新功能: 角色变化频道专属反应角色")
+    print(f"🇨🇳 全中文命令系统")
     asyncio.run(main())
