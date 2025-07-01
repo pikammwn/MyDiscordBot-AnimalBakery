@@ -1061,25 +1061,25 @@ def is_moderator_or_admin(interaction: discord.Interaction) -> bool:
     )
 
 # ==================== 🔍 搜索功能 ====================
-@bot.tree.command(name="搜索", description="在当前频道搜索指定作者的所有帖子")
+@bot.tree.command(name="搜索", description="在Forum频道搜索指定作者发布的帖子")
 @app_commands.describe(author="作者名称（可以是全名或关键字）")
 async def search_posts(interaction: discord.Interaction, author: str):
-    """搜索指定作者在当前频道的所有帖子"""
+    """搜索指定作者在当前频道发布的帖子"""
     await interaction.response.defer(ephemeral=True)
     
     try:
         # 检查当前频道类型
         if isinstance(interaction.channel, discord.ForumChannel):
-            # Forum频道 - 搜索thread
+            # Forum频道 - 搜索该作者发布的帖子
             threads = []
             
-            # 搜索活跃的thread
+            # 搜索活跃的thread（该作者为发帖人）
             for thread in interaction.channel.threads:
                 if thread.owner and (author.lower() in thread.owner.display_name.lower() or 
                                    author.lower() in str(thread.owner).lower()):
                     threads.append(thread)
             
-            # 搜索已归档的thread
+            # 搜索已归档的thread（该作者为发帖人）
             archived_threads = []
             async for thread in interaction.channel.archived_threads(limit=None):
                 if thread.owner and (author.lower() in thread.owner.display_name.lower() or 
@@ -1091,7 +1091,7 @@ async def search_posts(interaction: discord.Interaction, author: str):
             if not all_threads:
                 embed = discord.Embed(
                     title="🔍 搜索结果",
-                    description=f"在此Forum频道中未找到作者 `{author}` 的帖子。",
+                    description=f"在此Forum频道中未找到作者 `{author}` 发布的帖子。",
                     color=0xffa500
                 )
                 await interaction.edit_original_response(embed=embed)
@@ -1100,7 +1100,7 @@ async def search_posts(interaction: discord.Interaction, author: str):
             # 构建结果embed
             embed = discord.Embed(
                 title="🔍 搜索结果",
-                description=f"找到 {len(all_threads)} 个由 `{author}` 创建的帖子：",
+                description=f"找到 {len(all_threads)} 个由 `{author}` 发布的帖子：",
                 color=BOT_COLOR,
                 timestamp=datetime.now()
             )
@@ -1113,7 +1113,7 @@ async def search_posts(interaction: discord.Interaction, author: str):
                 
                 embed.add_field(
                     name=f"{i}. {archived_status} {thread.name[:50]}{'...' if len(thread.name) > 50 else ''}",
-                    value=f"**作者：** {thread.owner.mention if thread.owner else '未知'}\n**创建：** {created_time}\n**链接：** [点击查看]({thread.jump_url})",
+                    value=f"**发帖人：** {thread.owner.mention if thread.owner else '未知'}\n**创建时间：** {created_time}\n**链接：** [点击查看]({thread.jump_url})",
                     inline=False
                 )
             
@@ -1121,48 +1121,17 @@ async def search_posts(interaction: discord.Interaction, author: str):
                 embed.set_footer(text=f"显示前20个结果，总共找到{len(all_threads)}个帖子")
             
         else:
-            # 普通频道 - 搜索消息
-            messages = []
-            
-            # 搜索频道消息
-            async for message in interaction.channel.history(limit=None):
-                if (author.lower() in message.author.display_name.lower() or 
-                    author.lower() in str(message.author).lower()):
-                    messages.append(message)
-            
-            if not messages:
-                embed = discord.Embed(
-                    title="🔍 搜索结果",
-                    description=f"在此频道中未找到作者 `{author}` 的消息。",
-                    color=0xffa500
-                )
-                await interaction.edit_original_response(embed=embed)
-                return
-            
-            # 构建结果embed
+            # 非Forum频道 - 提示用户
             embed = discord.Embed(
-                title="🔍 搜索结果",
-                description=f"找到 {len(messages)} 条由 `{author}` 发送的消息：",
-                color=BOT_COLOR,
-                timestamp=datetime.now()
+                title="🔍 搜索功能说明",
+                description="此搜索功能仅适用于Forum频道，用于搜索指定作者发布的帖子。\n\n当前频道不是Forum频道，无法搜索帖子。",
+                color=0xffa500
             )
-            
-            # 显示消息列表（限制15条）
-            display_messages = messages[:15]
-            for i, message in enumerate(display_messages, 1):
-                sent_time = f"<t:{int(message.created_at.timestamp())}:R>"
-                content_preview = message.content[:100] + "..." if len(message.content) > 100 else message.content
-                if not content_preview.strip():
-                    content_preview = "*[图片/文件/嵌入内容]*"
-                
-                embed.add_field(
-                    name=f"{i}. 消息 {sent_time}",
-                    value=f"**作者：** {message.author.mention}\n**内容：** {content_preview}\n**链接：** [点击查看]({message.jump_url})",
-                    inline=False
-                )
-            
-            if len(messages) > 15:
-                embed.set_footer(text=f"显示前15条结果，总共找到{len(messages)}条消息")
+            embed.add_field(
+                name="💡 提示",
+                value="请在Forum频道中使用此命令来搜索用户发布的帖子。",
+                inline=False
+            )
         
         await interaction.edit_original_response(embed=embed)
         
@@ -2288,12 +2257,12 @@ async def help_slash(interaction: discord.Interaction):
     # 全员可用功能
     embed.add_field(
         name="📊 实用工具（全员可用）",
-        value="`/投票` - 创建投票\n`/搜索` - 搜索指定作者的帖子\n`/回首楼` - 回到频道首楼",
+        value="`/投票` - 创建投票\n`/搜索` - 搜索指定作者发布的帖子\n`/回首楼` - 回到频道首楼",
         inline=False
     )
 
     embed.add_field(name="部署平台", value="Vultr - 24小时稳定运行 ✨", inline=False)
-    embed.add_field(name="🆕 新功能", value="私信审核系统 + 消息标注功能 + 角色变化频道专属反应角色 + 全中文命令 + 作者搜索功能", inline=False)
+    embed.add_field(name="🆕 新功能", value="私信审核系统 + 消息标注功能 + 角色变化频道专属反应角色 + 全中文命令 + Forum帖子搜索功能", inline=False)
     embed.set_footer(text="使用中文斜杠命令来调用这些功能！现在运行在Vultr上，告别断线烦恼！")
 
     await interaction.response.send_message(embed=embed)
@@ -2321,7 +2290,7 @@ def home():
             <p>📌 新增消息标注功能！</p>
             <p>🎭 角色变化频道专属反应角色！</p>
             <p>🇨🇳 全中文斜杠命令！</p>
-            <p>🔍 新增作者搜索功能！</p>
+            <p>🔍 新增Forum帖子搜索功能！</p>
         </body>
     </html>
     """
@@ -2334,7 +2303,7 @@ def health():
         "guilds": len(bot.guilds) if bot.is_ready() else 0,
         "platform": "Vultr",
         "audit_system": "DM_Based",
-        "new_features": ["pin_message", "role_channel_restricted_reactions", "chinese_commands", "author_search"]
+        "new_features": ["pin_message", "role_channel_restricted_reactions", "chinese_commands", "forum_post_search"]
     })
 
 def run_flask():
@@ -2365,5 +2334,5 @@ if __name__ == "__main__":
     print(f"📌 新功能: 消息标注系统")
     print(f"🎭 新功能: 角色变化频道专属反应角色")
     print(f"🇨🇳 全中文命令系统")
-    print(f"🔍 新功能: 作者搜索系统")
+    print(f"🔍 新功能: Forum帖子搜索系统")
     asyncio.run(main())
