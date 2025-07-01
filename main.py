@@ -276,6 +276,159 @@ async def pin_message_slash(interaction: discord.Interaction, message_link: str)
         await interaction.response.send_message(f"❌ 发生错误：{e}", ephemeral=True)
         print(f"Pin message error: {e}")
 
+# ==================== 🔍 搜索功能 ====================
+class SearchPaginationView(discord.ui.View):
+    def __init__(self, posts: list, author: str, forum_channel: discord.ForumChannel, user: discord.User):
+        super().__init__(timeout=300)  # 5分钟超时
+        self.posts = posts
+        self.author = author
+        self.forum_channel = forum_channel
+        self.user = user
+        self.current_page = 0
+        self.posts_per_page = 10
+        self.max_pages = (len(posts) - 1) // self.posts_per_page + 1
+        
+        # 更新按钮状态
+        self.update_buttons()
+    
+    def update_buttons(self):
+        """更新按钮的启用/禁用状态"""
+        self.previous_button.disabled = (self.current_page == 0)
+        self.next_button.disabled = (self.current_page >= self.max_pages - 1)
+    
+    def get_current_page_embed(self):
+        """获取当前页的embed"""
+        start_idx = self.current_page * self.posts_per_page
+        end_idx = min(start_idx + self.posts_per_page, len(self.posts))
+        current_posts = self.posts[start_idx:end_idx]
+        
+        embed = discord.Embed(
+            title="🔍 搜索结果",
+            description=f"找到 {len(self.posts)} 个由 `{self.author}` 发布的帖子：",
+            color=BOT_COLOR,
+            timestamp=datetime.now()
+        )
+        
+        for i, thread in enumerate(current_posts, start=start_idx + 1):
+            created_time = f"<t:{int(thread.created_at.timestamp())}:R>"
+            archived_status = "📁" if thread.archived else "🟢"
+            
+            embed.add_field(
+                name=f"{i}. {archived_status} {thread.name[:50]}{'...' if len(thread.name) > 50 else ''}",
+                value=f"**发帖人：** {thread.owner.mention if thread.owner else '未知'}\n**创建时间：** {created_time}\n**链接：** [点击查看]({thread.jump_url})",
+                inline=False
+            )
+        
+        embed.set_footer(text=f"第 {self.current_page + 1} 页 / 共 {self.max_pages} 页 | 在论坛频道「{self.forum_channel.name}」中搜索")
+        return embed
+    
+    @discord.ui.button(label="上一页", style=discord.ButtonStyle.secondary, emoji="⬅️", custom_id="search_previous")
+    async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.user:
+            await interaction.response.send_message("❌ 只有搜索发起者可以翻页！", ephemeral=True)
+            return
+            
+        if self.current_page > 0:
+            self.current_page -= 1
+            self.update_buttons()
+            embed = self.get_current_page_embed()
+            await interaction.response.edit_message(embed=embed, view=self)
+        else:
+            await interaction.response.send_message("❌ 已经是第一页了！", ephemeral=True)
+    
+    @discord.ui.button(label="下一页", style=discord.ButtonStyle.secondary, emoji="➡️", custom_id="search_next")
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.user:
+            await interaction.response.send_message("❌ 只有搜索发起者可以翻页！", ephemeral=True)
+            return
+            
+        if self.current_page < self.max_pages - 1:
+            self.current_page += 1
+            self.update_buttons()
+            embed = self.get_current_page_embed()
+            await interaction.response.edit_message(embed=embed, view=self)
+        else:
+            await interaction.response.send_message("❌ 已经是最后一页了！", ephemeral=True)
+    
+    async def on_timeout(self):
+        """超时后禁用所有按钮"""
+        for item in self.children:
+            item.disabled = True
+
+@bot.tree.command(name="搜索", description="在论坛频道搜索指定作者发布的帖子")
+@app_commands.describe(author="作者名称（可以是全名或关键字）")
+async def search_posts(interaction: discord.Interaction, author: str):
+    """搜索指定作者在论坛频道发布的帖子"""
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        # 检查当前是否在Forum频道的Thread中
+        forum_channel = None
+        if isinstance(interaction.channel, discord.Thread):
+            # 如果在Thread中，获取父频道
+            parent_channel = interaction.channel.parent
+            if isinstance(parent_channel, discord.ForumChannel):
+                forum_channel = parent_channel
+        elif isinstance(interaction.channel, discord.ForumChannel):
+            # 如果直接在Forum频道中
+            forum_channel = interaction.channel
+        
+        if not forum_channel:
+            embed = discord.Embed(
+                title="🔍 搜索功能说明",
+                description="此搜索功能仅适用于论坛频道及其帖子内，用于搜索指定作者发布的帖子。\n\n请在论坛频道或论坛频道内的帖子中使用此命令。",
+                color=0xffa500
+            )
+            embed.add_field(
+                name="💡 提示",
+                value="请在论坛频道或论坛频道内的帖子中使用此命令来搜索用户发布的帖子。",
+                inline=False
+            )
+            await interaction.edit_original_response(embed=embed)
+            return
+        
+        # 搜索该论坛频道中该作者发布的所有帖子
+        threads = []
+        
+        # 搜索活跃的thread（该作者为发帖人）
+        for thread in forum_channel.threads:
+            if thread.owner and (author.lower() in thread.owner.display_name.lower() or 
+                               author.lower() in str(thread.owner).lower()):
+                threads.append(thread)
+        
+        # 搜索已归档的thread（该作者为发帖人）
+        async for thread in forum_channel.archived_threads(limit=None):
+            if thread.owner and (author.lower() in thread.owner.display_name.lower() or 
+                               author.lower() in str(thread.owner).lower()):
+                threads.append(thread)
+        
+        if not threads:
+            embed = discord.Embed(
+                title="🔍 搜索结果",
+                description=f"在论坛频道「{forum_channel.name}」中未找到作者 `{author}` 发布的帖子。",
+                color=0xffa500
+            )
+            await interaction.edit_original_response(embed=embed)
+            return
+        
+        # 按创建时间降序排列（最新的在前）
+        threads.sort(key=lambda x: x.created_at, reverse=True)
+        
+        # 创建分页视图
+        view = SearchPaginationView(threads, author, forum_channel, interaction.user)
+        embed = view.get_current_page_embed()
+        
+        await interaction.edit_original_response(embed=embed, view=view)
+        
+    except Exception as e:
+        error_embed = discord.Embed(
+            title="❌ 搜索失败",
+            description=f"搜索过程中出现错误：{e}",
+            color=0xff0000
+        )
+        await interaction.edit_original_response(embed=error_embed)
+        print(f"搜索错误: {e}")
+
 # ==================== 📝 拒绝理由填写模态框 ====================
 class RejectReasonModal(discord.ui.Modal, title='📝 填写拒绝理由'):
     def __init__(self, member: discord.Member, original_view, select_view):
@@ -1060,90 +1213,6 @@ def is_moderator_or_admin(interaction: discord.Interaction) -> bool:
         MODERATOR_ROLE_NAME in user_roles
     )
 
-# ==================== 🔍 搜索功能 ====================
-@bot.tree.command(name="搜索", description="在Forum频道搜索指定作者发布的帖子")
-@app_commands.describe(author="作者名称（可以是全名或关键字）")
-async def search_posts(interaction: discord.Interaction, author: str):
-    """搜索指定作者在当前频道发布的帖子"""
-    await interaction.response.defer(ephemeral=True)
-    
-    try:
-        # 检查当前频道类型
-        if isinstance(interaction.channel, discord.ForumChannel):
-            # Forum频道 - 搜索该作者发布的帖子
-            threads = []
-            
-            # 搜索活跃的thread（该作者为发帖人）
-            for thread in interaction.channel.threads:
-                if thread.owner and (author.lower() in thread.owner.display_name.lower() or 
-                                   author.lower() in str(thread.owner).lower()):
-                    threads.append(thread)
-            
-            # 搜索已归档的thread（该作者为发帖人）
-            archived_threads = []
-            async for thread in interaction.channel.archived_threads(limit=None):
-                if thread.owner and (author.lower() in thread.owner.display_name.lower() or 
-                                   author.lower() in str(thread.owner).lower()):
-                    archived_threads.append(thread)
-            
-            all_threads = threads + archived_threads
-            
-            if not all_threads:
-                embed = discord.Embed(
-                    title="🔍 搜索结果",
-                    description=f"在此Forum频道中未找到作者 `{author}` 发布的帖子。",
-                    color=0xffa500
-                )
-                await interaction.edit_original_response(embed=embed)
-                return
-            
-            # 构建结果embed
-            embed = discord.Embed(
-                title="🔍 搜索结果",
-                description=f"找到 {len(all_threads)} 个由 `{author}` 发布的帖子：",
-                color=BOT_COLOR,
-                timestamp=datetime.now()
-            )
-            
-            # 显示帖子列表（限制20个）
-            display_threads = all_threads[:20]
-            for i, thread in enumerate(display_threads, 1):
-                created_time = f"<t:{int(thread.created_at.timestamp())}:R>"
-                archived_status = "📁" if thread.archived else "🟢"
-                
-                embed.add_field(
-                    name=f"{i}. {archived_status} {thread.name[:50]}{'...' if len(thread.name) > 50 else ''}",
-                    value=f"**发帖人：** {thread.owner.mention if thread.owner else '未知'}\n**创建时间：** {created_time}\n**链接：** [点击查看]({thread.jump_url})",
-                    inline=False
-                )
-            
-            if len(all_threads) > 20:
-                embed.set_footer(text=f"显示前20个结果，总共找到{len(all_threads)}个帖子")
-            
-        else:
-            # 非Forum频道 - 提示用户
-            embed = discord.Embed(
-                title="🔍 搜索功能说明",
-                description="此搜索功能仅适用于Forum频道，用于搜索指定作者发布的帖子。\n\n当前频道不是Forum频道，无法搜索帖子。",
-                color=0xffa500
-            )
-            embed.add_field(
-                name="💡 提示",
-                value="请在Forum频道中使用此命令来搜索用户发布的帖子。",
-                inline=False
-            )
-        
-        await interaction.edit_original_response(embed=embed)
-        
-    except Exception as e:
-        error_embed = discord.Embed(
-            title="❌ 搜索失败",
-            description=f"搜索过程中出现错误：{e}",
-            color=0xff0000
-        )
-        await interaction.edit_original_response(embed=error_embed)
-        print(f"搜索错误: {e}")
-
 @bot.tree.command(name="批准", description="批准待审核用户（仅管理员可用）")
 @app_commands.describe(
     member="要批准的用户",
@@ -1805,29 +1874,6 @@ async def top_slash(interaction: discord.Interaction):
     except Exception as e:
         await interaction.response.send_message("❌ 获取第一条消息时出错了！", ephemeral=True)
 
-@bot.tree.command(name="回首楼按钮", description="发送一个永久的回首楼按钮")
-async def topbutton_slash(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.manage_messages:
-        await interaction.response.send_message("❌ 你没有管理消息的权限！", ephemeral=True)
-        return
-
-    embed = discord.Embed(
-        title="🚀 快速回首楼工具",
-        description="点击下面的按钮可以快速回到频道第一条消息！",
-        color=BOT_COLOR
-    )
-    embed.add_field(name="使用方法", value="点击按钮即可瞬间跳转到频道的第一条消息（首楼）", inline=False)
-    embed.set_footer(text="此按钮永久有效")
-
-    # 使用已定义的持久化按钮视图
-    view = PersistentTopButtonView()
-
-    await interaction.response.send_message(embed=embed, view=view)
-    await interaction.followup.send("✅ 回首楼按钮已设置完成！", ephemeral=True)
-
-    # 记录日志
-    await send_log("🚀 设置回首楼按钮", f"{interaction.user} 在 {interaction.channel} 设置了回首楼按钮", BOT_COLOR)
-
 # ==================== 🆘 帮助命令 ====================
 
 @bot.tree.command(name="调试", description="检查bot权限和角色配置（仅管理员可用）")
@@ -2262,8 +2308,8 @@ async def help_slash(interaction: discord.Interaction):
     )
 
     embed.add_field(name="部署平台", value="Vultr - 24小时稳定运行 ✨", inline=False)
-    embed.add_field(name="🆕 新功能", value="私信审核系统 + 消息标注功能 + 角色变化频道专属反应角色 + 全中文命令 + Forum帖子搜索功能", inline=False)
-    embed.set_footer(text="使用中文斜杠命令来调用这些功能！现在运行在Vultr上，告别断线烦恼！")
+    embed.add_field(name="🆕 新功能", value="帖子搜索功能", inline=False)
+    embed.set_footer(text="使用中文斜杠命令来调用这些功能！")
 
     await interaction.response.send_message(embed=embed)
 
@@ -2286,11 +2332,6 @@ def home():
             <p>🏠 服务器数: {len(bot.guilds) if bot.is_ready() else 0}</p>
             <p>🚀 Vultr部署成功！</p>
             <p>🎉 告别断线烦恼！</p>
-            <p>📱 新增私信审核系统！</p>
-            <p>📌 新增消息标注功能！</p>
-            <p>🎭 角色变化频道专属反应角色！</p>
-            <p>🇨🇳 全中文斜杠命令！</p>
-            <p>🔍 新增Forum帖子搜索功能！</p>
         </body>
     </html>
     """
@@ -2303,7 +2344,7 @@ def health():
         "guilds": len(bot.guilds) if bot.is_ready() else 0,
         "platform": "Vultr",
         "audit_system": "DM_Based",
-        "new_features": ["pin_message", "role_channel_restricted_reactions", "chinese_commands", "forum_post_search"]
+        "new_features": ["pin_message", "role_channel_restricted_reactions", "chinese_commands", "forum_post_search_pagination"]
     })
 
 def run_flask():
@@ -2334,5 +2375,5 @@ if __name__ == "__main__":
     print(f"📌 新功能: 消息标注系统")
     print(f"🎭 新功能: 角色变化频道专属反应角色")
     print(f"🇨🇳 全中文命令系统")
-    print(f"🔍 新功能: Forum帖子搜索系统")
+    print(f"🔍 新功能: 论坛帖子搜索系统（分页显示）")
     asyncio.run(main())
