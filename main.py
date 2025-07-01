@@ -60,6 +60,9 @@ bot = MyBot()
 # 用户图片存储字典（临时存储）
 user_images = {}
 
+# 用户审核状态存储字典（保存文字信息）
+user_audit_states = {}
+
 # ==================== 📝 日志功能 ====================
 async def send_log(title: str, description: str, color: int = 0x36393f):
     """发送一般日志到指定频道（审核通过、公告、系统信息等）"""
@@ -472,6 +475,10 @@ class RejectReasonModal(discord.ui.Modal, title='📝 填写拒绝理由'):
                 # 清理用户之前的图片数据（重新审核需要重新上传）
                 if self.member.id in user_images:
                     del user_images[self.member.id]
+                    
+                # 🆕 清理用户审核状态数据
+                if self.member.id in user_audit_states:
+                    del user_audit_states[self.member.id]
 
                 # 发私信通知可以重新提交
                 try:
@@ -488,7 +495,7 @@ class RejectReasonModal(discord.ui.Modal, title='📝 填写拒绝理由'):
                     )
                     
                     # 发送带重新提交按钮的消息
-                    await self.member.send(embed=dm_embed, view=UserAuditView())
+                    await self.member.send(embed=dm_embed, view=UserAuditView(user_id=self.member.id))
                 except discord.Forbidden:
                     pass
 
@@ -496,6 +503,8 @@ class RejectReasonModal(discord.ui.Modal, title='📝 填写拒绝理由'):
                 # 踢出服务器前清理数据
                 if self.member.id in user_images:
                     del user_images[self.member.id]
+                if self.member.id in user_audit_states:
+                    del user_audit_states[self.member.id]
                 await self.member.kick(reason=f"审核被拒绝：{reason}")
                 action_text = "已踢出服务器"
                 color = 0xff9900
@@ -504,6 +513,8 @@ class RejectReasonModal(discord.ui.Modal, title='📝 填写拒绝理由'):
                 # 封禁用户前清理数据
                 if self.member.id in user_images:
                     del user_images[self.member.id]
+                if self.member.id in user_audit_states:
+                    del user_audit_states[self.member.id]
                 await self.member.ban(reason=f"审核被拒绝：{reason}")
                 action_text = "已封禁用户"
                 color = 0xff0000
@@ -585,9 +596,15 @@ class UserInfoModal(discord.ui.Modal, title='📝 提交个人信息'):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        # 保存用户输入的信息
+        # 保存用户输入的信息到视图和全局状态
         self.user_view.discord_info = self.discord_info.value
         self.user_view.additional_info = self.additional_info.value
+        
+        # 🆕 保存到全局状态字典，避免丢失
+        user_audit_states[interaction.user.id] = {
+            'discord_info': self.discord_info.value,
+            'additional_info': self.additional_info.value
+        }
         
         embed = discord.Embed(
             title="✅ 文字信息已提交",
@@ -597,15 +614,26 @@ class UserInfoModal(discord.ui.Modal, title='📝 提交个人信息'):
         embed.add_field(name="Discord信息", value=self.discord_info.value, inline=False)
         if self.additional_info.value:
             embed.add_field(name="补充信息", value=self.additional_info.value, inline=False)
+            
+        # 🆕 检查用户是否已上传图片
+        if interaction.user.id in user_images:
+            embed.add_field(name="✅ 已上传截图", value="支付宝截图已上传，现在可以直接提交审核！", inline=False)
+            embed.description = "你的Discord信息已记录！检测到你之前已上传截图，现在可以直接提交审核。"
 
         await interaction.response.edit_message(embed=embed, view=self.user_view)
 
 # ==================== 🎭 用户审核提交界面 ====================
 class UserAuditView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, user_id=None):
         super().__init__(timeout=None)
         self.discord_info = None
         self.additional_info = None
+        
+        # 🆕 如果提供了用户ID，尝试从全局状态恢复信息
+        if user_id and user_id in user_audit_states:
+            saved_state = user_audit_states[user_id]
+            self.discord_info = saved_state.get('discord_info')
+            self.additional_info = saved_state.get('additional_info')
 
     @discord.ui.button(label="填写文字信息", style=discord.ButtonStyle.primary, emoji="📝", custom_id="user_text_info")
     async def submit_text_info(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -635,6 +663,14 @@ class UserAuditView(discord.ui.View):
 
     @discord.ui.button(label="提交审核", style=discord.ButtonStyle.success, emoji="✅", custom_id="user_submit_audit")
     async def submit_audit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 🆕 检查文字信息：优先使用视图中的信息，如果没有则从全局状态恢复
+        if not self.discord_info:
+            # 尝试从全局状态恢复
+            if interaction.user.id in user_audit_states:
+                saved_state = user_audit_states[interaction.user.id]
+                self.discord_info = saved_state.get('discord_info')
+                self.additional_info = saved_state.get('additional_info')
+        
         if not self.discord_info:
             await interaction.response.send_message("❌ 请先填写文字信息！", ephemeral=True)
             return
@@ -690,6 +726,10 @@ class UserAuditView(discord.ui.View):
             # 清理用户图片数据（提交后删除）
             if interaction.user.id in user_images:
                 del user_images[interaction.user.id]
+                
+            # 🆕 清理用户审核状态数据（提交后删除）
+            if interaction.user.id in user_audit_states:
+                del user_audit_states[interaction.user.id]
 
             # 回复用户
             success_embed = discord.Embed(
@@ -728,6 +768,10 @@ class UserAuditView(discord.ui.View):
         # 清理用户图片数据
         if interaction.user.id in user_images:
             del user_images[interaction.user.id]
+            
+        # 🆕 清理用户审核状态数据
+        if interaction.user.id in user_audit_states:
+            del user_audit_states[interaction.user.id]
 
         # 启用提交按钮
         for item in self.children:
@@ -943,7 +987,7 @@ class RejectActionView(discord.ui.View):
                     )
                     
                     # 发送带重新提交按钮的消息
-                    await self.member.send(embed=dm_embed, view=UserAuditView())
+                    await self.member.send(embed=dm_embed, view=UserAuditView(user_id=self.member.id))
                 except discord.Forbidden:
                     pass
 
@@ -1115,7 +1159,7 @@ async def on_member_join(member):
                 embed.set_footer(text="审核通过后即可访问所有频道！")
 
                 # 发送私信并附带审核按钮
-                await member.send(embed=embed, view=UserAuditView())
+                await member.send(embed=embed, view=UserAuditView(user_id=member.id))
                 print(f"✅ [DEBUG] 成功向 {member} 发送私信审核消息")
 
             except discord.Forbidden:
@@ -1192,8 +1236,15 @@ async def on_message(message):
                                         color=0x00ff00
                                     )
                                     
-                                    # 创建新的视图实例
-                                    user_view = UserAuditView()
+                                    # 🆕 创建视图实例时传入用户ID以恢复之前的状态
+                                    user_view = UserAuditView(user_id=message.author.id)
+                                    
+                                    # 🆕 检查是否已有保存的文字信息，如果有则在embed中显示
+                                    if user_view.discord_info:
+                                        embed.add_field(name="✅ 已保存的文字信息", value=f"Discord信息：{user_view.discord_info}", inline=False)
+                                        if user_view.additional_info:
+                                            embed.add_field(name="补充信息", value=user_view.additional_info, inline=False)
+                                        embed.description = "你的支付宝截图已接收！检测到你之前已填写文字信息，信息已自动保留。\n\n现在可以直接点击'提交审核'按钮完成提交。"
                                     
                                     await message.channel.send(embed=embed, view=user_view)
                                     
@@ -1411,6 +1462,11 @@ async def reaudit_member(interaction: discord.Interaction, member: discord.Membe
         if member.id in user_images:
             del user_images[member.id]
             print(f"🔍 [DEBUG] 清理了用户 {member} 的旧图片数据")
+            
+        # 🆕 清理用户审核状态数据（重新审核需要重新填写）
+        if member.id in user_audit_states:
+            del user_audit_states[member.id]
+            print(f"🔍 [DEBUG] 清理了用户 {member} 的旧审核状态数据")
 
         embed = discord.Embed(
             title="🔄 重新审核",
@@ -1434,7 +1490,7 @@ async def reaudit_member(interaction: discord.Interaction, member: discord.Membe
                 value="1. 📝 填写Discord信息\n2. 📸 重新上传支付宝截图\n3. ✅ 提交审核\n\n**注意：需要重新上传截图！**",
                 inline=False
             )
-            await member.send(embed=dm_embed, view=UserAuditView())
+            await member.send(embed=dm_embed, view=UserAuditView(user_id=member.id))
         except discord.Forbidden:
             pass
 
@@ -1761,9 +1817,6 @@ class TopButtonView(discord.ui.View):
 
             cute_messages = [
                 f"🐕 汪！[又回到首楼了呢～]({jump_url})",
-                f"✨ [再次传送成功！]({jump_url})",
-                f"🎉 [咻咻咻～]({jump_url})",
-                f"🌟 [无限回首楼模式！]({jump_url})",
                 f"🏃‍♂️ [来回跑真开心！]({jump_url})"
             ]
 
@@ -1798,10 +1851,7 @@ class PersistentTopButtonView(discord.ui.View):
 
             cute_messages = [
                 f"🐕 汪！[瞬间回首楼！]({jump_url})",
-                f"✨ [咻～传送完成！]({jump_url})",
                 f"🎉 [成功抵达首楼！]({jump_url})",
-                f"🌟 [时光倒流成功！]({jump_url})",
-                f"🏃‍♂️ [闪现回首楼！]({jump_url})"
             ]
 
             import random
@@ -2043,7 +2093,7 @@ async def remind_audit_slash(interaction: discord.Interaction):
                 embed.set_footer(text="审核通过后即可访问所有频道！")
 
                 # 发送私信并附带审核按钮
-                await member.send(embed=embed, view=UserAuditView())
+                await member.send(embed=embed, view=UserAuditView(user_id=member.id))
                 success_count += 1
 
             except discord.Forbidden:
@@ -2084,7 +2134,7 @@ async def remind_audit_slash(interaction: discord.Interaction):
                 embed.set_footer(text="点击下方按钮重新开始审核流程")
 
                 # 发送私信并附带审核按钮
-                await member.send(embed=embed, view=UserAuditView())
+                await member.send(embed=embed, view=UserAuditView(user_id=member.id))
                 success_count += 1
 
             except discord.Forbidden:
@@ -2223,7 +2273,7 @@ async def remind_user_slash(interaction: discord.Interaction, member: discord.Me
             status_text = "被拒绝"
 
         # 发送私信并附带审核按钮
-        await member.send(embed=embed, view=UserAuditView())
+        await member.send(embed=embed, view=UserAuditView(user_id=member.id))
 
         # 创建成功回复
         success_embed = discord.Embed(
@@ -2307,8 +2357,8 @@ async def help_slash(interaction: discord.Interaction):
         inline=False
     )
 
-    embed.add_field(name="部署平台", value="Vultr - 24小时稳定运行 ✨", inline=False)
-    embed.add_field(name="🆕 新功能", value="帖子搜索功能", inline=False)
+    embed.add_field(name="部署平台", value="Vultr", inline=False)
+    embed.add_field(name="🆕 新功能", value="论坛帖子搜索功能（分页显示）", inline=False)
     embed.set_footer(text="使用中文斜杠命令来调用这些功能！")
 
     await interaction.response.send_message(embed=embed)
@@ -2331,7 +2381,6 @@ def home():
             <p>🕐 运行时间: {uptime}</p>
             <p>🏠 服务器数: {len(bot.guilds) if bot.is_ready() else 0}</p>
             <p>🚀 Vultr部署成功！</p>
-            <p>🎉 告别断线烦恼！</p>
         </body>
     </html>
     """
@@ -2371,9 +2420,4 @@ if __name__ == "__main__":
         exit(1)
     
     print(f"🚀 在Vultr上启动 {BOT_NAME}...")
-    print(f"📱 新审核系统: 私信提交模式")
-    print(f"📌 新功能: 消息标注系统")
-    print(f"🎭 新功能: 角色变化频道专属反应角色")
-    print(f"🇨🇳 全中文命令系统")
-    print(f"🔍 新功能: 论坛帖子搜索系统（分页显示）")
     asyncio.run(main())
